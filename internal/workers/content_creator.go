@@ -193,8 +193,8 @@ func (s *Server) generateBlogPost(ctx context.Context, targetQuery string, impre
 
 // generateBlogPostWithInstructions uses a 2-step agent pipeline:
 //
-//	Step 1 — Senior Content Strategist: research the topic, pick an angle, build an outline
-//	Step 2 — Expert Content Writer: write the full article from the outline
+//	Step 1 — Content Strategist: research the topic, pick an angle, build an outline
+//	Step 2 — Content Writer: write the full article from the outline (uses higher-quality model)
 //
 // customInstructions is optional admin guidance injected into both steps.
 func (s *Server) generateBlogPostWithInstructions(ctx context.Context, targetQuery string, impressions int64, customInstructions string) (*generatedPost, error) {
@@ -204,42 +204,50 @@ func (s *Server) generateBlogPostWithInstructions(ctx context.Context, targetQue
 		extraGuidance = fmt.Sprintf("\n\nADMIN INSTRUCTIONS (follow these carefully):\n%s\n", customInstructions)
 	}
 
+	today := time.Now().Format("2 January 2006")
+
+	// Use blog-specific model for writing (higher quality), fallback to default
+	blogModel := s.cfg.OpenAIBlogModel
+	if blogModel == "" {
+		blogModel = s.cfg.OpenAIModel
+	}
+
 	// ── Step 1: Content Strategist — research & outline ──────────────────────
 
-	strategistPrompt := fmt.Sprintf(`You are a Senior Content Strategist at 91Astrology, India's leading Vedic astrology platform.
-You have 15+ years of experience in astrology content that ranks on Google India.
+	strategistPrompt := fmt.Sprintf(`You are a content planner at 91Astrology.com, an Indian Vedic astrology website.
+Today's date: %s
 
-Your task: research and plan a blog post for the keyword below.
+Plan a blog post for this topic: "%s"
+Search impressions: %d
 
-Target keyword: "%s"
-Monthly search impressions: %d
+Rules:
+1. Pick ONE specific angle — not a broad overview. Example: instead of "all about Ekadashi", pick "why breaking Ekadashi vrat early causes problems" or "5 foods you can eat during Ekadashi fast".
+2. The heading must sound like a real Hindi astrology blog title. Short, direct, clickable.
+   GOOD: "Ekadashi Ka Vrat Kaise Kholein — Sahi Vidhi", "Shani Sade Sati Mein Kya Karein Kya Na Karein", "Rahu Ketu Transit 2026: Kaun Si Rashi Ko Milega Fayda?"
+   BAD: "Unveiling the Mysteries of Ekadashi", "A Comprehensive Guide to Sade Sati", "Harnessing the Power of Rahu Ketu Transit"
+3. Plan 5-7 sections. Each section title should be a question or a specific claim, not a generic topic.
+   GOOD section: "Vrat kholne ka sahi samay kya hai?" / "Which nakshatra people are most affected?"
+   BAD section: "Understanding the Significance" / "The Importance of Rituals"
+4. List 6-8 Hindi/Sanskrit terms readers would search for (e.g., "ekadashi vrat vidhi", "parana time", "nirjala ekadashi").
+5. Image: describe a warm, realistic Indian spiritual scene (temple, diya, puja thali, etc). No text in image.
 
-Think step by step:
-1. INTENT ANALYSIS — What is the searcher really looking for? Are they a beginner, intermediate, or advanced reader? What problem are they trying to solve?
-2. COMPETITIVE ANGLE — What unique angle can 91Astrology take that generic sites won't? Think Vedic-specific insights, practical remedies, real-life examples.
-3. CONTENT STRUCTURE — Plan 5-7 sections that flow logically, each answering a specific sub-question the reader has.
-4. KEY TERMS — List 8-10 related Vedic astrology terms (Sanskrit, Hindi, English) to weave in naturally for topical authority.
-5. IMAGE CONCEPT — Describe a single featured image that would visually represent this topic (for AI image generation).
+LANGUAGE: Write the heading and metaTitle in natural Hinglish (Hindi words in Roman script mixed with English). The metaDescription should be in English for SEO.
 
-HEADING AND TITLE RULES (CRITICAL):
-- Write like a human journalist, NOT an AI. The heading must feel like something a real Indian astrology blogger would write.
-- NEVER use these AI-sounding patterns: "Unveiled", "Unlocking", "Demystified", "Harnessing", "Comprehensive Guide", "Everything You Need to Know", "The Ultimate", "Dive Into", "Navigating", "Exploring", "Discover the Power of", "A Deep Dive", "Revolutionize", "Game-Changer", "Realm", "Tapestry", "Landscape", "Embark"
-- GOOD heading examples: "Lal Kitab Remedies That Actually Work", "Why Your Kundli Might Be Wrong", "Mars in 7th House — What It Means for Marriage", "10 Vastu Tips for a New Home"
-- BAD heading examples: "Unveiling the Secrets of Lal Kitab", "Harnessing Cosmic Energy Through Vedic Wisdom", "Exploring the Mystical Realm of Tarot"
-- Keep it conversational, specific, and direct. Use numbers, questions, or bold claims.
+DO NOT use any of these words anywhere: unveil, unlock, harness, delve, realm, tapestry, landscape, embark, comprehensive, crucial, fascinating, remarkable, navigate, revolutionary.
 
-Output ONLY valid JSON:
+Output ONLY valid JSON (no markdown fences):
 {
-  "angle": "the unique angle/hook for this article (1-2 sentences)",
-  "audience": "who this is for and their knowledge level",
-  "category": "one of: Festival, Zodiac, Kundli, Numerology, Vedic, Tarot, Vastu, Palm Reading, National",
-  "heading": "natural, human-sounding heading (max 60 chars, include keyword)",
-  "metaTitle": "SEO title (max 60 chars, natural tone, include keyword)",
-  "metaDescription": "meta description (max 155 chars, conversational, include keyword + CTA)",
-  "sections": ["Section 1 Title", "Section 2 Title", ...],
-  "keyTerms": ["term1", "term2", ...],
-  "imagePrompt": "detailed description for AI image generation: style, colors, subject, mood — Indian/Vedic aesthetic, no text in image"
+  "angle": "specific angle in 1 sentence",
+  "audience": "who will read this and why",
+  "category": "Festival|Zodiac|Kundli|Numerology|Vedic|Tarot|Vastu|Palm Reading|National",
+  "heading": "Hinglish heading, max 65 chars",
+  "metaTitle": "SEO title, max 60 chars, Hinglish",
+  "metaDescription": "English meta desc, max 155 chars, include topic + action word",
+  "sections": ["Section 1 as question/claim", "Section 2", ...],
+  "keyTerms": ["hindi/sanskrit term 1", "term 2", ...],
+  "imagePrompt": "realistic Indian spiritual scene description for image generation, warm colors, no text"
 }`,
+		today,
 		targetQuery,
 		impressions,
 	)
@@ -247,10 +255,10 @@ Output ONLY valid JSON:
 	stratResp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.cfg.OpenAIModel,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: "You are a senior content strategist with deep expertise in Vedic astrology and SEO. You write like a real human blogger — never use AI-sounding words like 'unveil', 'delve', 'realm', 'harness', 'comprehensive guide'. Think carefully before planning. Output only valid JSON, no markdown."},
+			{Role: openai.ChatMessageRoleSystem, Content: "You are a content planner for an Indian Vedic astrology blog. You think like an Indian reader searching Google in Hindi/English. Output only valid JSON."},
 			{Role: openai.ChatMessageRoleUser, Content: strategistPrompt + extraGuidance},
 		},
-		Temperature: 0.6,
+		Temperature: 0.5,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("strategist step: %w", err)
@@ -266,35 +274,67 @@ Output ONLY valid JSON:
 	sectionsJSON, _ := json.Marshal(outline.Sections)
 	termsJSON, _ := json.Marshal(outline.KeyTerms)
 
-	writerPrompt := fmt.Sprintf(`You are an Expert Vedic Astrology Content Writer with 10+ years of experience writing long-form articles that rank #1 on Google India.
+	writerPrompt := fmt.Sprintf(`You are writing a blog post for 91Astrology.com. Write like a senior Indian astrologer who talks to clients every day — not like a content mill or AI.
 
-You have been given a detailed content plan by your strategist. Now write the full article.
+Today's date: %s
 
 CONTENT PLAN:
-- Target keyword: "%s"
+- Topic: "%s"
 - Angle: %s
-- Audience: %s
-- Sections to cover: %s
-- Key Vedic terms to weave in: %s
+- Reader: %s
+- Sections: %s
+- Terms to include naturally: %s
 
-WRITING GUIDELINES:
-- Write as a knowledgeable friend explaining astrology — warm, authoritative, never condescending
-- Open with a hook that connects to the reader's real life (a question, a scenario, a surprising fact)
-- Each section should be 150-250 words with concrete details, not generic filler
-- Use examples: "For instance, if your Moon is in Rohini Nakshatra..." or "Consider someone born during Amavasya..."
-- Include practical takeaways: remedies, mantras, gemstone suggestions, dos/don'ts where relevant
-- Naturally weave in the Vedic terms — don't force them, explain briefly when introducing a term
-- End with a clear conclusion that gives the reader a next step (check their Kundli, consult an astrologer, etc.)
-- Total word count: 1500-2500 words
+═══════════════════════════════════════════════════════════
+WRITING RULES — READ EVERY SINGLE ONE BEFORE YOU START
+═══════════════════════════════════════════════════════════
 
-ANTI-AI LANGUAGE RULES (STRICTLY FOLLOW):
-- Write like a real Indian astrology blogger, NOT like an AI assistant
-- BANNED words/phrases — NEVER use any of these: "delve", "tapestry", "landscape", "realm", "embark", "unveil", "unlock", "harness", "navigate", "comprehensive", "crucial", "leverage", "innovative", "cutting-edge", "game-changer", "revolutionize", "in today's world", "in the realm of", "it's important to note", "it's worth noting", "in conclusion", "furthermore", "moreover", "nonetheless", "fascinating", "intriguing", "remarkable", "let's dive in", "without further ado", "at the end of the day"
-- BANNED sentence patterns: "Imagine a world where...", "Have you ever wondered...", "In this article, we will explore...", "Let's embark on a journey...", "[Topic] is more than just..."
-- Instead write like a person who actually practices astrology and talks to clients daily
-- Use simple, direct Hindi-English mixed tone where natural (like "Rahu ka prabhav" instead of "the influence of the shadow planet Rahu")
-- Vary sentence length — mix short punchy sentences with longer explanations
-- Be specific: "wear a 7-mukhi Rudraksha on Thursday" instead of "certain gemstones can help align your energies"
+LANGUAGE:
+- Write the ENTIRE article in ENGLISH. This is non-negotiable.
+- You may use well-known Hindi/Sanskrit terms (like Rahu, Ketu, Mahadasha, Kundli, Panchang, Tithi, Nakshatra, Muhurat, Graha, Dasha) but always in Roman script and with a brief explanation on first use.
+- Do NOT randomly switch to Hindi sentences mid-paragraph. Do NOT write full Hindi sentences. Do NOT use Devanagari script.
+- Example of CORRECT usage: "During Sade Sati (Saturn's 7.5-year transit over your Moon sign), you might feel..."
+- Example of WRONG usage: "Sade Sati mein aapko bohot mushkilein aati hain aur yeh samay..."
+
+TONE AND STYLE:
+- Write like you are explaining to a friend over chai. Warm, direct, personal.
+- Use "you" and "your" frequently. Talk TO the reader.
+- Start the article with a specific hook — a real scenario, a bold statement, or a practical question. NOT "Have you ever wondered..." or "In the vast tapestry of..."
+- GOOD opening: "If you were born between 1990-1995, chances are you've already gone through your first Saturn return — and you felt it."
+- BAD opening: "Vedic astrology has been guiding humanity for thousands of years..."
+- Vary paragraph lengths. Some 2-3 sentences, some longer. Never uniform blocks.
+- Use short sentences for impact. "That changes everything." / "This is where most people go wrong."
+
+CONTENT QUALITY:
+- Every section must teach something specific. No filler paragraphs that just repeat the heading in different words.
+- Give SPECIFIC remedies with exact details: which day, which mantra (with text), which gemstone (with weight/metal), which food to donate, etc.
+  GOOD: "Chant 'Om Shanaischaraya Namaha' 108 times every Saturday morning before sunrise. Wear a 7-mukhi Rudraksha in a silver pendant."
+  BAD: "Chanting mantras and wearing appropriate gemstones can help mitigate the effects."
+- When mentioning planetary transits or dates, ONLY mention them if you are 100%% certain. If unsure, describe the general effect without claiming specific dates.
+- Do NOT invent transit dates, retrograde periods, or eclipse dates. If the topic is about a specific date/event, the admin instructions will tell you.
+- Give real examples: "If your Moon is in Bharani Nakshatra and Mars is in the 7th house, you might notice..."
+- Do NOT repeat the same advice for all 12 zodiac signs. If covering multiple signs, give genuinely different predictions/remedies for each.
+
+STRUCTURE:
+- Do NOT always follow the "sign-by-sign" format. Vary your article structure based on the topic.
+- For festivals/vrats: focus on vidhi (method), timing, do's/don'ts, spiritual significance
+- For transits: focus on who's affected most, what to expect, specific remedies
+- For remedies: focus on the problem, why it works, step-by-step instructions, common mistakes
+- Each section: 150-300 words of real content
+
+CTA — INCLUDE THESE NATURALLY:
+- Mention 91Astrology at least once: "You can check your personalized prediction on 91Astrology.com"
+- End with a practical next step: "Get your free Kundli on 91Astrology to see exactly how this transit affects your chart."
+- Do NOT make CTAs sound salesy. Weave them naturally into advice.
+
+ABSOLUTELY BANNED (using any of these = article rejected):
+- Words: delve, tapestry, landscape, realm, embark, unveil, unlock, harness, navigate, comprehensive, crucial, leverage, innovative, cutting-edge, game-changer, revolutionize, furthermore, moreover, nonetheless, fascinating, intriguing, remarkable, pivotal, myriad, plethora, paradigm
+- Phrases: "In today's world", "In this article we will", "It's important to note", "It's worth noting", "Without further ado", "At the end of the day", "In conclusion", "Let's dive in", "Have you ever wondered", "Since ancient times", "From time immemorial", "Imagine a world where", "More than just a", "Not just... but also"
+- Patterns: Starting 3+ consecutive paragraphs with the same word. Using the word "journey" to describe anything other than actual travel.
+
+TOTAL LENGTH: 1800-2500 words across all sections combined.
+
+═══════════════════════════════════════════════════════════
 
 Output ONLY valid JSON:
 {
@@ -303,21 +343,22 @@ Output ONLY valid JSON:
   "metaDescription": "%s",
   "category": "%s",
   "content": [
-    {"children": [{"text": "Engaging introduction paragraph (150-200 words with hook)..."}]}
+    {"children": [{"text": "Introduction paragraph — 150-200 words, starts with a hook, sets up what the reader will learn."}]}
   ],
   "paragraphs": [
     {
       "Heading": "Section Title",
-      "Paragraph": [{"children": [{"text": "Section content 150-250 words with examples and Vedic terms..."}]}]
+      "Paragraph": [{"children": [{"text": "Full section content, 150-300 words, specific details, examples, remedies where relevant."}]}]
     }
   ]
 }
 
-CRITICAL RULES:
-- Content and Paragraph text MUST be Slate rich text format: array of objects with "children" array containing objects with "text" key
-- Use the exact heading, metaTitle, metaDescription, and category from above
-- Write ALL sections from the plan — do not skip any
-- Every section must have real substance — no thin paragraphs, no generic advice`,
+Format rules:
+- "content" and "Paragraph" values must be Slate rich text: array of objects with "children" array containing {"text": "..."} objects
+- Use the exact heading, metaTitle, metaDescription, category values provided above
+- Write ALL planned sections — do not skip any
+- No markdown inside text values — plain text only`,
+		today,
 		targetQuery,
 		outline.Angle,
 		outline.Audience,
@@ -330,13 +371,12 @@ CRITICAL RULES:
 	)
 
 	writerResp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: s.cfg.OpenAIModel,
+		Model: blogModel,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: "You are an expert Vedic astrology content writer who writes like a real Indian astrology blogger. Your writing must sound 100% human — never use AI cliche words like 'unveil', 'delve', 'realm', 'harness', 'navigate', 'comprehensive'. Write in a natural, conversational tone with Hindi-English mix where appropriate. Output only valid JSON, no markdown."},
+			{Role: openai.ChatMessageRoleSystem, Content: "You are a senior Vedic astrologer writing blog posts for 91Astrology.com. You write in clear English with Hindi/Sanskrit astrology terms where natural. Your tone is warm, direct, and personal — like talking to a client. You never sound like an AI. You give specific, actionable advice with exact mantras, gemstones, and rituals. Output only valid JSON, no markdown fences."},
 			{Role: openai.ChatMessageRoleUser, Content: writerPrompt + extraGuidance},
 		},
-		Temperature: 0.7,
-		MaxTokens:   4096,
+		Temperature: 1,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("writer step: %w", err)

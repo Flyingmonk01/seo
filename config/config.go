@@ -20,8 +20,9 @@ type Config struct {
 	GSCSiteURL         string
 
 	// OpenAI
-	OpenAIAPIKey string
-	OpenAIModel  string
+	OpenAIAPIKey    string
+	OpenAIModel     string
+	OpenAIBlogModel string // higher-quality model for blog content generation
 
 	// Bitbucket
 	BitbucketToken     string
@@ -78,8 +79,9 @@ func Load() *Config {
 		GSCCredentialsPath: getEnv("GSC_CREDENTIALS_PATH", "./gsc-credentials.json"),
 		GSCSiteURL:         getEnv("GSC_SITE_URL", "sc-domain:91astrology.com"),
 
-		OpenAIAPIKey: getEnv("OPENAI_API_KEY", ""),
-		OpenAIModel:  getEnv("OPENAI_MODEL", "gpt-4o"),
+		OpenAIAPIKey:    getEnv("OPENAI_API_KEY", ""),
+		OpenAIModel:     getEnv("OPENAI_MODEL", "gpt-4o"),
+		OpenAIBlogModel: getEnv("OPENAI_BLOG_MODEL", "gpt-5"),
 
 		BitbucketToken:     getEnv("BITBUCKET_TOKEN", ""),
 		BitbucketWorkspace: getEnv("BITBUCKET_WORKSPACE", ""),

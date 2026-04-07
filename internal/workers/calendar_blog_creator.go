@@ -16,257 +16,303 @@ import (
 )
 
 type calendarBlogPayload struct {
-	MaxPosts      int `json:"max_posts"`
-	LookAheadDays int `json:"look_ahead_days"`
+	MaxPosts int `json:"max_posts"`
 }
 
 type upcomingEvent struct {
-	Title    string `json:"title"`
-	Date     string `json:"date"`
-	Query    string `json:"query"`
-	Category string `json:"category"`
+	Title    string
+	Date     string
+	Query    string
+	Category string
 }
 
-// fetchCalendarBharatEvents fetches festival/event data from the calendar-bharat
-// GitHub project which has accurate tithi-based dates for each year.
-func fetchCalendarBharatEvents(year int, from, to time.Time) ([]upcomingEvent, error) {
-	url := fmt.Sprintf("https://jayantur13.github.io/calendar-bharat/calendar/%d.json", year)
+// todayFestival checks calendar-bharat for any festival today or tomorrow.
+func todayFestival(today time.Time) *upcomingEvent {
+	url := fmt.Sprintf("https://jayantur13.github.io/calendar-bharat/calendar/%d.json", today.Year())
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetch calendar-bharat %d: %w", year, err)
+		return nil
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("calendar-bharat %d returned %d", year, resp.StatusCode)
-	}
+	body, _ := io.ReadAll(resp.Body)
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	// Schema: { "2026": { "January 2026": { "January 1, 2026, Thursday": { event, type, extras } } } }
 	var raw map[string]map[string]map[string]struct {
 		Event  string `json:"event"`
 		Type   string `json:"type"`
 		Extras string `json:"extras"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse calendar-bharat: %w", err)
-	}
-
-	yearData := raw[fmt.Sprintf("%d", year)]
-
-	var events []upcomingEvent
-	for _, monthEntries := range yearData {
-		for dateStr, entry := range monthEntries {
-			// dateStr format: "January 1, 2026, Thursday"
-			// Parse by stripping the day-of-week suffix
-			parts := strings.Split(dateStr, ", ")
-			if len(parts) < 3 {
-				continue
-			}
-			datePart := parts[0] + ", " + parts[1] // "January 1, 2026"
-			evDate, err := time.Parse("January 2, 2006", datePart)
-			if err != nil {
-				continue
-			}
-
-			// Only include events strictly after today and within the look-ahead window
-			if !evDate.After(from) || evDate.After(to) {
-				continue
-			}
-
-			// Skip non-astrology content: government holidays, awareness days
-			typeLower := strings.ToLower(entry.Type)
-			if strings.Contains(typeLower, "government") {
-				continue
-			}
-			eventLower := strings.ToLower(entry.Event)
-			if strings.Contains(eventLower, "world ") ||
-				strings.Contains(eventLower, "international ") ||
-				strings.Contains(eventLower, "day") && strings.Contains(entry.Extras, "fixed day in Gregorian") {
-				continue
-			}
-
-			// Map category
-			category := "Festival"
-			extrasLower := strings.ToLower(entry.Extras)
-			if strings.Contains(extrasLower, "astronomy event") ||
-				strings.Contains(extrasLower, "retrograde") ||
-				strings.Contains(extrasLower, "eclipse") ||
-				strings.Contains(extrasLower, "equinox") ||
-				strings.Contains(extrasLower, "solstice") {
-				category = "Vedic"
-			}
-
-			title := fmt.Sprintf("%s %d", strings.TrimSpace(entry.Event), year)
-			query := fmt.Sprintf("%s %d astrology significance", strings.ToLower(strings.TrimSpace(entry.Event)), year)
-
-			events = append(events, upcomingEvent{
-				Title:    title,
-				Date:     evDate.Format("2006-01-02"),
-				Query:    query,
-				Category: category,
-			})
-		}
-	}
-	return events, nil
-}
-
-// fetchProkeralaEvents calls Prokerala for each day in the window and returns
-// astrologically significant days (Ekadashi, Pradosh, Purnima, Amavasya etc.)
-// based on the actual tithi for that date.
-func (s *Server) fetchProkeralaEvents(from, to time.Time, existingTitles map[string]bool) []upcomingEvent {
-	if !s.prokerala.IsConfigured() {
-		log.Println("[calendar-blog] Prokerala not configured — skipping")
 		return nil
 	}
 
-	var events []upcomingEvent
-	seen := map[string]bool{} // deduplicate same tithi-event in window
-
-	for d := from.AddDate(0, 0, 1); !d.After(to); d = d.AddDate(0, 0, 1) {
-		panchang, err := s.prokerala.FetchPanchang(d)
-		if err != nil {
-			log.Printf("[calendar-blog] Prokerala %s: %v", d.Format("2006-01-02"), err)
-			continue
-		}
-
-		if info, ok := services.SignificantTithis[panchang.Tithi]; ok {
-			key := info.Name + d.Format("2006-01")
-			if seen[key] || existingTitles[strings.ToLower(info.Name)] {
-				continue
+	// Check today and tomorrow
+	for _, d := range []time.Time{today, today.AddDate(0, 0, 1)} {
+		for _, monthEntries := range raw[fmt.Sprintf("%d", d.Year())] {
+			for dateStr, entry := range monthEntries {
+				parts := strings.Split(dateStr, ", ")
+				if len(parts) < 3 {
+					continue
+				}
+				evDate, err := time.Parse("January 2, 2006", parts[0]+", "+parts[1])
+				if err != nil || evDate.Format("2006-01-02") != d.Format("2006-01-02") {
+					continue
+				}
+				// Skip non-religious and non-astrology entries
+				if strings.ToLower(entry.Type) == "good to know" {
+					continue
+				}
+				if strings.Contains(strings.ToLower(entry.Type), "government") {
+					continue
+				}
+				name := strings.ToLower(entry.Event)
+				if strings.Contains(name, "mother's day") || strings.Contains(name, "father's day") ||
+					strings.Contains(name, "valentine") || strings.Contains(name, "christmas") ||
+					strings.Contains(name, "new year") || strings.Contains(name, "world ") ||
+					strings.Contains(name, "international ") {
+					continue
+				}
+				return &upcomingEvent{
+					Title:    fmt.Sprintf("%s %d", strings.TrimSpace(entry.Event), d.Year()),
+					Date:     d.Format("2006-01-02"),
+					Query:    fmt.Sprintf("%s %d astrology significance", strings.ToLower(strings.TrimSpace(entry.Event)), d.Year()),
+					Category: "Festival",
+				}
 			}
-			seen[key] = true
-			year := d.Year()
-			month := d.Format("January")
-			events = append(events, upcomingEvent{
-				Title:    fmt.Sprintf("%s %s %d", info.Name, month, year),
-				Date:     d.Format("2006-01-02"),
-				Query:    fmt.Sprintf("%s %s %d", info.Query, strings.ToLower(month), year),
-				Category: info.Category,
-			})
 		}
-		// Rate limit: Prokerala free tier is 5 req/min
-		time.Sleep(15 * time.Second)
 	}
-	return events
+	return nil
 }
 
-// fetchOpenAIGapEvents asks OpenAI (with web search) for celestial events
-// NOT typically covered by festival calendars: retrogrades, eclipses, transits.
-func (s *Server) fetchOpenAIGapEvents(ctx context.Context, from, to time.Time, existingTitles map[string]bool) ([]upcomingEvent, error) {
-	prompt := fmt.Sprintf(`Search the web for Hindu/Vedic astrological celestial events between %s and %s that are NOT regular festivals.
+// todayTithi fetches today's tithi from Prokerala (1 API call).
+func (s *Server) todayTithi(today time.Time) *upcomingEvent {
+	if !s.prokerala.IsConfigured() {
+		return nil
+	}
+	anchor, err := s.prokerala.FetchTodayTithi(today)
+	if err != nil {
+		log.Printf("[calendar-blog] Prokerala tithi fetch failed: %v", err)
+		return nil
+	}
 
-Focus ONLY on:
-- Planetary retrogrades (Saturn, Jupiter, Mercury, Venus, Mars)
-- Solar and Lunar eclipses (Surya Grahan, Chandra Grahan)
-- Major planetary transits (e.g. Jupiter entering a new sign)
-- Rare astronomical events relevant to Vedic astrology
+	significant := map[string]struct{ query, category string }{
+		"Shukla Paksha Ekadashi":    {"ekadashi vrat fasting significance", "Vedic"},
+		"Krishna Paksha Ekadashi":   {"ekadashi vrat fasting significance", "Vedic"},
+		"Shukla Paksha Purnima":     {"purnima significance vedic rituals", "Vedic"},
+		"Krishna Paksha Amavasya":   {"amavasya significance ancestors rituals", "Vedic"},
+		"Shukla Paksha Trayodashi":  {"pradosh vrat shiva puja significance", "Vedic"},
+		"Krishna Paksha Trayodashi": {"pradosh vrat shiva puja significance", "Vedic"},
+		"Krishna Paksha Chaturdashi":{"masik shivratri puja significance", "Vedic"},
+		"Shukla Paksha Chaturthi":   {"vinayaka chaturthi puja significance", "Festival"},
+		"Shukla Paksha Navami":      {"navami significance vedic puja", "Festival"},
+	}
 
-Do NOT include regular festivals or Jayantis — only celestial/astronomical events.
-Only include events with dates strictly after %s.
+	info, ok := significant[anchor.TithiName]
+	if !ok {
+		log.Printf("[calendar-blog] Tithi %q not significant, skipping", anchor.TithiName)
+		return nil
+	}
 
-Return ONLY a valid JSON array:
-[{"title":"event name with year","date":"YYYY-MM-DD","query":"vedic seo query 3-6 words with year","category":"Vedic"}]`,
-		from.Format("2006-01-02"),
-		to.Format("2006-01-02"),
-		from.Format("2006-01-02"),
+	month := today.Format("January")
+	year := today.Year()
+	// Extract short name from tithi (e.g. "Shukla Paksha Ekadashi" → "Ekadashi Vrat")
+	shortNames := map[string]string{
+		"Shukla Paksha Ekadashi": "Ekadashi Vrat", "Krishna Paksha Ekadashi": "Ekadashi Vrat",
+		"Shukla Paksha Purnima": "Purnima", "Krishna Paksha Amavasya": "Amavasya",
+		"Shukla Paksha Trayodashi": "Pradosh Vrat", "Krishna Paksha Trayodashi": "Pradosh Vrat",
+		"Krishna Paksha Chaturdashi": "Masik Shivratri", "Shukla Paksha Chaturthi": "Vinayaka Chaturthi",
+		"Shukla Paksha Navami": "Navami",
+	}
+	name := shortNames[anchor.TithiName]
+
+	return &upcomingEvent{
+		Title:    fmt.Sprintf("%s %s %d", name, month, year),
+		Date:     today.Format("2006-01-02"),
+		Query:    fmt.Sprintf("%s %s %d", info.query, strings.ToLower(month), year),
+		Category: info.category,
+	}
+}
+
+// trendingAstroTopic asks OpenAI for one high-traffic astrology topic for today.
+func (s *Server) trendingAstroTopic(ctx context.Context, today time.Time) *upcomingEvent {
+	prompt := fmt.Sprintf(`Today is %s. Suggest ONE high-traffic Vedic astrology or Indian spirituality topic that people are searching for RIGHT NOW — seasonal, timely, or evergreen with high organic potential.
+
+NOT a festival or tithi (those are covered separately). Think: zodiac predictions, kundli tips, vastu, numerology, palmistry, remedies, planetary effects, nakshatra insights.
+
+Return ONLY valid JSON (single object):
+{"title":"Blog title with year","query":"seo target query 3-5 words","category":"Zodiac|Kundli|Vedic|Numerology|Vastu|Palm Reading"}`,
+		today.Format("2 January 2006"),
 	)
 
 	resp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: "gpt-4o-search-preview",
+		Model: s.cfg.OpenAIModel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
+		Temperature: 0.7,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openai gap events: %w", err)
+		log.Printf("[calendar-blog] Trending topic fetch failed: %v", err)
+		return nil
 	}
 
-	var events []upcomingEvent
-	if err := json.Unmarshal([]byte(cleanLLMJSON(resp.Choices[0].Message.Content)), &events); err != nil {
-		return nil, fmt.Errorf("parse gap events: %w", err)
+	var result struct {
+		Title    string `json:"title"`
+		Query    string `json:"query"`
+		Category string `json:"category"`
+	}
+	if err := json.Unmarshal([]byte(cleanLLMJSON(resp.Choices[0].Message.Content)), &result); err != nil {
+		log.Printf("[calendar-blog] Trending topic parse failed: %v", err)
+		return nil
 	}
 
-	// Filter: only future, only non-duplicate titles
-	var filtered []upcomingEvent
-	for _, ev := range events {
-		evDate, err := time.Parse("2006-01-02", ev.Date)
-		if err != nil || !evDate.After(from) {
-			continue
-		}
-		if existingTitles[strings.ToLower(ev.Title)] {
-			continue
-		}
-		filtered = append(filtered, ev)
+	return &upcomingEvent{
+		Title:    result.Title,
+		Date:     today.Format("2006-01-02"),
+		Query:    result.Query,
+		Category: result.Category,
 	}
-	return filtered, nil
+}
+
+// viralAstroTopic asks OpenAI for a celebrity/viral/pop-culture astrology topic
+// that drives high organic search traffic — birth charts, predictions, zodiac
+// compatibility of famous couples, trending Bollywood/cricket personalities, etc.
+func (s *Server) viralAstroTopic(ctx context.Context, today time.Time, avoid []string) *upcomingEvent {
+	avoidList := ""
+	if len(avoid) > 0 {
+		avoidList = fmt.Sprintf("\n\nDO NOT suggest any of these topics (already covered): %s", strings.Join(avoid, ", "))
+	}
+
+	prompt := fmt.Sprintf(`Today is %s. Suggest ONE viral, high-search-volume astrology topic about a REAL celebrity, public figure, or pop-culture moment that Indian audiences are actively searching for.
+
+Pick from these categories (rotate, don't always pick the same type):
+
+1. CELEBRITY KUNDLI ANALYSIS — Birth chart breakdown of a trending Bollywood actor, cricketer, politician, or influencer. Pick someone in the news RIGHT NOW or with an upcoming birthday/movie/match.
+   Examples: "Shah Rukh Khan Ki Kundli — Raj Yoga Ka Raaz", "Virat Kohli Birth Chart: Why 2026 Is His Year", "Alia Bhatt Zodiac Sign and Nakshatra Analysis"
+
+2. CELEBRITY COUPLE COMPATIBILITY — Zodiac/kundli matching of a famous couple (married, dating, or rumored).
+   Examples: "Ranbir-Alia Kundli Milan: Kitna Compatible Hai Ye Jodi?", "Deepika-Ranveer Zodiac Compatibility Decoded"
+
+3. ZODIAC SIGN LISTICLES — Fun, shareable zodiac content that goes viral on social media.
+   Examples: "Most Successful Zodiac Signs in Bollywood", "Which Rashi Makes the Best Life Partner?", "Zodiac Signs Who Become Rich After 30"
+
+4. PREDICTION/CONTROVERSY — Astrology take on a trending news event, election, IPL season, movie release, or viral moment.
+   Examples: "IPL 2026: Which Captain's Stars Are Strongest?", "New PM Prediction According to Vedic Astrology", "Why Bollywood Flops Are Connected to Rahu Transit"
+
+5. RELATABLE ASTROLOGY — Everyday life topics through an astrology lens that people Google.
+   Examples: "Shadi Ke Liye Sabse Acchi Rashi Kaun Si Hai?", "Career Change Kab Karein — Kundli Se Jaanein", "Love Marriage vs Arranged Marriage: Kya Kehti Hai Kundli?"
+
+RULES:
+- The person/topic MUST be real and currently relevant (2025-2026). No fictional characters.
+- Title should be in Hinglish (Hindi in Roman script + English mix) — this is what Indians actually search.
+- Query should be the Google search terms people would type.
+- Pick someone/something that is genuinely trending or evergreen popular — not obscure.%s
+
+Return ONLY valid JSON (single object):
+{"title":"Catchy Hinglish blog title","query":"google search query 3-6 words","category":"Zodiac|Kundli|Vedic|Numerology"}`,
+		today.Format("2 January 2006"),
+		avoidList,
+	)
+
+	resp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model: s.cfg.OpenAIModel,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: prompt},
+		},
+		Temperature: 0.9,
+	})
+	if err != nil {
+		log.Printf("[calendar-blog] Viral topic fetch failed: %v", err)
+		return nil
+	}
+
+	var result struct {
+		Title    string `json:"title"`
+		Query    string `json:"query"`
+		Category string `json:"category"`
+	}
+	if err := json.Unmarshal([]byte(cleanLLMJSON(resp.Choices[0].Message.Content)), &result); err != nil {
+		log.Printf("[calendar-blog] Viral topic parse failed: %v", err)
+		return nil
+	}
+
+	return &upcomingEvent{
+		Title:    result.Title,
+		Date:     today.Format("2006-01-02"),
+		Query:    result.Query,
+		Category: result.Category,
+	}
 }
 
 func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task) error {
 	var p calendarBlogPayload
 	if err := json.Unmarshal(task.Payload(), &p); err != nil || p.MaxPosts == 0 {
-		p.MaxPosts = 5
-	}
-	if p.LookAheadDays == 0 {
-		p.LookAheadDays = 45
+		p.MaxPosts = 3
 	}
 
 	log.Println("[calendar-blog] ─────────────────────────────────────────")
-	log.Printf("[calendar-blog] Fetching events for next %d days (max %d posts)...", p.LookAheadDays, p.MaxPosts)
 
 	now := time.Now().UTC()
-	windowEnd := now.AddDate(0, 0, p.LookAheadDays)
 
-	// Step 1: Fetch accurate festival dates from calendar-bharat API
-	var events []upcomingEvent
-	for _, year := range []int{now.Year(), now.Year() + 1} {
-		yearEvents, err := fetchCalendarBharatEvents(year, now, windowEnd)
-		if err != nil {
-			log.Printf("[calendar-blog] WARN: calendar-bharat %d fetch failed: %v", year, err)
+	// Collect up to 3 events: festival + tithi + trending topic
+	var candidates []*upcomingEvent
+
+	if festival := todayFestival(now); festival != nil {
+		log.Printf("[calendar-blog] Festival: %s", festival.Title)
+		candidates = append(candidates, festival)
+	}
+
+	if tithi := s.todayTithi(now); tithi != nil {
+		log.Printf("[calendar-blog] Tithi: %s", tithi.Title)
+		candidates = append(candidates, tithi)
+	}
+
+	// Fill remaining slots alternating: viral (celebrity/pop-culture), trending (astro)
+	fillNeeded := p.MaxPosts - len(candidates)
+	if fillNeeded < 1 {
+		fillNeeded = 1
+	}
+	var usedTitles []string
+	for _, c := range candidates {
+		usedTitles = append(usedTitles, c.Title)
+	}
+
+	isDup := func(ev *upcomingEvent) bool {
+		for _, c := range candidates {
+			if strings.EqualFold(c.Query, ev.Query) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for i := 0; i < fillNeeded; i++ {
+		var ev *upcomingEvent
+		if i%2 == 0 {
+			// Even slots: viral/celebrity topic
+			ev = s.viralAstroTopic(ctx, now, usedTitles)
 		} else {
-			events = append(events, yearEvents...)
-			log.Printf("[calendar-blog] calendar-bharat %d: %d events in window", year, len(yearEvents))
+			// Odd slots: trending astro topic
+			ev = s.trendingAstroTopic(ctx, now)
+		}
+		if ev != nil && !isDup(ev) {
+			label := "Viral"
+			if i%2 != 0 {
+				label = "Trending"
+			}
+			log.Printf("[calendar-blog] %s #%d: %s", label, i+1, ev.Title)
+			candidates = append(candidates, ev)
+			usedTitles = append(usedTitles, ev.Title)
 		}
 	}
 
-	existingTitles := map[string]bool{}
-	for _, ev := range events {
-		existingTitles[strings.ToLower(ev.Title)] = true
-	}
-
-	// Step 2: Prokerala — tithi-based astrological events (Ekadashi, Pradosh, Purnima, Amavasya)
-	prokeralaEvents := s.fetchProkeralaEvents(now, windowEnd, existingTitles)
-	log.Printf("[calendar-blog] Prokerala tithi events: %d", len(prokeralaEvents))
-	for _, ev := range prokeralaEvents {
-		existingTitles[strings.ToLower(ev.Title)] = true
-	}
-	events = append(events, prokeralaEvents...)
-
-	// Step 3: OpenAI web search — retrogrades, eclipses, major transits only
-	gapEvents, err := s.fetchOpenAIGapEvents(ctx, now, windowEnd, existingTitles)
-	if err != nil {
-		log.Printf("[calendar-blog] WARN: OpenAI gap events failed: %v", err)
-	} else {
-		log.Printf("[calendar-blog] OpenAI celestial gap events: %d", len(gapEvents))
-		events = append(events, gapEvents...)
-	}
-
-	log.Printf("[calendar-blog] Total events to process: %d", len(events))
-
-	if len(events) == 0 {
-		log.Println("[calendar-blog] No upcoming events found — nothing to generate")
+	if len(candidates) == 0 {
+		log.Println("[calendar-blog] No candidates today — nothing to generate")
 		return nil
 	}
 
-	// Dedup against already-published cluster keys and headings
+	// Dedup against already-published cluster keys
 	usedClusterKeys := s.loadUsedClusterKeysFromCMS()
-	existingPosts, err := s.cms.ListPosts(500, "en")
-	if err != nil {
-		log.Printf("[calendar-blog] WARN: could not list existing posts: %v", err)
-	}
+	existingPosts, _ := s.cms.ListPosts(500, "en")
 	existingHeadings := map[string]bool{}
 	for _, post := range existingPosts {
 		if h, ok := post["Heading"].(string); ok {
@@ -275,16 +321,10 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 	}
 
 	created := 0
-	for _, ev := range events {
+	for _, ev := range candidates {
 		if created >= p.MaxPosts {
 			break
 		}
-
-		eventDate, err := time.Parse("2006-01-02", ev.Date)
-		if err != nil {
-			continue
-		}
-		daysUntil := int(eventDate.Sub(now).Hours() / 24)
 
 		clusterKey := services.ClusterKey(ev.Query)
 		if usedClusterKeys[clusterKey] {
@@ -292,14 +332,11 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 			continue
 		}
 
-		log.Printf("[calendar-blog] ── Event: %q on %s (%d days away) ──", ev.Title, ev.Date, daysUntil)
+		log.Printf("[calendar-blog] ── Generating: %q ──", ev.Title)
 
 		customInstructions := fmt.Sprintf(
-			"This article is for '%s' on %s (%d days away). "+
-				"Include the exact date. Cover: what the event is, astrological significance, "+
-				"Vedic remedies, puja vidhi, dos and don'ts, muhurat if applicable. "+
-				"Make it timely, specific, and actionable for someone preparing for this event.",
-			ev.Title, eventDate.Format("2 January 2006"), daysUntil,
+			"Write about '%s'. Today is %s. Make it timely and actionable.",
+			ev.Title, now.Format("2 January 2006"),
 		)
 
 		post, err := s.generateBlogPostWithInstructions(ctx, ev.Query, 0, customInstructions)
@@ -309,73 +346,48 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 		}
 
 		if existingHeadings[strings.ToLower(post.Heading)] {
-			log.Printf("[calendar-blog]   ~ skip — heading already exists: %q", post.Heading)
+			log.Printf("[calendar-blog]   ~ skip — heading exists: %q", post.Heading)
 			continue
 		}
 
 		var imageID string
 		if post.ImagePrompt != "" {
-			imgID, err := s.generateAndUploadImage(ctx, post.ImagePrompt, post.Heading)
-			if err != nil {
-				log.Printf("[calendar-blog]   ! image generation failed (continuing): %v", err)
+			if imgID, err := s.generateAndUploadImage(ctx, post.ImagePrompt, post.Heading); err != nil {
+				log.Printf("[calendar-blog]   ! image failed: %v", err)
 			} else {
 				imageID = imgID
 			}
 		}
 
-		categoryRelID := s.resolveCategoryID(ev.Category)
-		authorID := s.resolveAuthorID()
-
 		cmsPost := map[string]interface{}{
-			"title":      post.Heading,
-			"Heading":    post.Heading,
-			"Date":       time.Now().Format("2 January 2006"),
-			"Category":   ev.Category,
-			"Content":    post.Content,
-			"Paragraph":  post.Paragraphs,
-			"Identifier": "en",
-			"isHidden":   true,
-			"meta": map[string]string{
-				"title":       post.MetaTitle,
-				"description": post.MetaDescription,
-			},
+			"title": post.Heading, "Heading": post.Heading,
+			"Date": now.Format("2 January 2006"), "Category": ev.Category,
+			"Content": post.Content, "Paragraph": post.Paragraphs,
+			"Identifier": "en", "isHidden": true,
+			"meta": map[string]string{"title": post.MetaTitle, "description": post.MetaDescription},
 		}
-		if imageID != "" {
-			cmsPost["image"] = imageID
-		}
-		if authorID != "" {
-			cmsPost["author"] = authorID
-		}
-		if categoryRelID != "" {
-			cmsPost["category"] = categoryRelID
-		}
+		if imageID != "" { cmsPost["image"] = imageID }
+		if id := s.resolveAuthorID(); id != "" { cmsPost["author"] = id }
+		if id := s.resolveCategoryID(ev.Category); id != "" { cmsPost["category"] = id }
 
 		docID, err := s.cms.CreatePost(cmsPost)
 		if err != nil {
 			log.Printf("[calendar-blog]   x CMS create failed: %v", err)
 			continue
 		}
-		log.Printf("[calendar-blog]   + Created post %s: %q (hidden, needs review)", docID, post.Heading)
+		log.Printf("[calendar-blog]   + Created: %s %q", docID, post.Heading)
 
-		topicID, err := s.cms.CreateTopic(map[string]interface{}{
-			"query":      ev.Query,
-			"clusterKey": clusterKey,
-			"heading":    post.Heading,
-			"post":       docID,
-			"status":     "pending",
+		s.cms.CreateTopic(map[string]interface{}{
+			"query": ev.Query, "clusterKey": clusterKey,
+			"heading": post.Heading, "post": docID, "status": "pending",
 		})
-		if err != nil {
-			log.Printf("[calendar-blog]   ! WARN: could not save topic: %v", err)
-		} else {
-			log.Printf("[calendar-blog]   + Topic saved: %s", topicID)
-		}
 
 		usedClusterKeys[clusterKey] = true
 		existingHeadings[strings.ToLower(post.Heading)] = true
 		created++
 	}
 
-	log.Printf("[calendar-blog] ── Summary: created %d event-based posts (hidden) ──", created)
+	log.Printf("[calendar-blog] ── Done: %d posts created ──", created)
 	log.Println("[calendar-blog] ─────────────────────────────────────────")
 	return nil
 }
