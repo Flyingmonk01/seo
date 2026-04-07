@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/91astro/seo-agent/internal/services"
 )
 
@@ -17,84 +18,60 @@ type calendarBlogPayload struct {
 	LookAheadDays int `json:"look_ahead_days"`
 }
 
-// calendarEvent represents a fixed astrological/festival event that drives SEO content.
-type calendarEvent struct {
-	Date        time.Time
-	Title       string // short name, e.g. "Navratri 2026"
-	Query       string // the SEO query to target
-	Category    string // maps to CMS category
-	Urgency     int    // days before event to publish (lead time)
+type upcomingEvent struct {
+	Title    string `json:"title"`    // e.g. "Hanuman Jayanti 2026"
+	Date     string `json:"date"`     // "YYYY-MM-DD"
+	Query    string `json:"query"`    // SEO target query
+	Category string `json:"category"` // Festival / Vedic / Zodiac
 }
 
-// astroCalendar returns the hardcoded astrological event calendar for the current year.
-// Add/update dates here each year. Events are sorted loosely by date.
-func astroCalendar(year int) []calendarEvent {
-	y := year
-	return []calendarEvent{
-		// ── Festivals ────────────────────────────────────────────────────────────
-		{date(y, 1, 14), "Makar Sankranti " + itoa(y), "makar sankranti " + itoa(y) + " astrology significance", "Festival", 21},
-		{date(y, 1, 26), "Vasant Panchami " + itoa(y), "vasant panchami " + itoa(y) + " puja vidhi muhurat", "Festival", 14},
-		{date(y, 2, 26), "Mahashivratri " + itoa(y), "mahashivratri " + itoa(y) + " shiva puja astrology", "Festival", 21},
-		{date(y, 3, 14), "Holi " + itoa(y), "holi " + itoa(y) + " astrology color significance", "Festival", 14},
-		{date(y, 3, 30), "Chaitra Navratri " + itoa(y), "chaitra navratri " + itoa(y) + " dates muhurat", "Festival", 21},
-		{date(y, 4, 6), "Ram Navami " + itoa(y), "ram navami " + itoa(y) + " puja timing significance", "Festival", 14},
-		{date(y, 4, 10), "Hanuman Jayanti " + itoa(y), "hanuman jayanti " + itoa(y) + " kundli remedy", "Festival", 10},
-		{date(y, 5, 12), "Buddha Purnima " + itoa(y), "buddha purnima " + itoa(y) + " full moon astrology", "Festival", 14},
-		{date(y, 7, 7), "Guru Purnima " + itoa(y), "guru purnima " + itoa(y) + " jupiter significance vedic", "Festival", 14},
-		{date(y, 8, 9), "Nag Panchami " + itoa(y), "nag panchami " + itoa(y) + " rahu ketu remedies", "Festival", 10},
-		{date(y, 8, 16), "Raksha Bandhan " + itoa(y), "raksha bandhan " + itoa(y) + " muhurat astrology", "Festival", 14},
-		{date(y, 8, 27), "Janmashtami " + itoa(y), "janmashtami " + itoa(y) + " krishna birth chart astrology", "Festival", 14},
-		{date(y, 9, 22), "Pitru Paksha " + itoa(y), "pitru paksha " + itoa(y) + " shraddh dates significance", "Festival", 21},
-		{date(y, 10, 2), "Shardiya Navratri " + itoa(y), "shardiya navratri " + itoa(y) + " dates ghatasthapana muhurat", "Festival", 21},
-		{date(y, 10, 12), "Dussehra " + itoa(y), "dussehra " + itoa(y) + " vijayadashami astrology puja", "Festival", 14},
-		{date(y, 10, 20), "Dhanteras " + itoa(y), "dhanteras " + itoa(y) + " shubh muhurat shopping astrology", "Festival", 10},
-		{date(y, 10, 22), "Diwali " + itoa(y), "diwali " + itoa(y) + " lakshmi puja muhurat astrology", "Festival", 21},
-		{date(y, 11, 5), "Chhath Puja " + itoa(y), "chhath puja " + itoa(y) + " significance surya astrology", "Festival", 14},
-		{date(y, 12, 25), "Christmas Astrology " + itoa(y), "christmas " + itoa(y) + " astrology zodiac predictions", "Festival", 14},
+// fetchUpcomingEvents asks OpenAI for real upcoming Hindu/astrological events
+// in the next lookAheadDays days. Returns events sorted by date ascending.
+func (s *Server) fetchUpcomingEvents(ctx context.Context, from time.Time, lookAheadDays int) ([]upcomingEvent, error) {
+	to := from.AddDate(0, 0, lookAheadDays)
 
-		// ── Planetary Transits & Retrogrades ─────────────────────────────────────
-		{date(y, 3, 29), "Saturn Retrograde " + itoa(y), "saturn retrograde " + itoa(y) + " effects zodiac signs", "Vedic", 21},
-		{date(y, 5, 25), "Jupiter Retrograde " + itoa(y), "jupiter retrograde " + itoa(y) + " impact career finances", "Vedic", 21},
-		{date(y, 7, 18), "Mercury Retrograde " + itoa(y), "mercury retrograde " + itoa(y) + " do's and don'ts", "Vedic", 14},
-		{date(y, 9, 9), "Venus Retrograde " + itoa(y), "venus retrograde " + itoa(y) + " love relationships impact", "Vedic", 21},
-		{date(y, 11, 9), "Mars Retrograde " + itoa(y), "mars retrograde " + itoa(y) + " energy career effects", "Vedic", 21},
+	prompt := fmt.Sprintf(`Today is %s. List all significant Hindu festivals, Vedic astrological events, planetary transits, retrogrades, and eclipses happening between %s and %s (inclusive).
 
-		// ── Eclipses ─────────────────────────────────────────────────────────────
-		{date(y, 3, 14), "Lunar Eclipse March " + itoa(y), "lunar eclipse march " + itoa(y) + " zodiac impact dos donts", "Vedic", 21},
-		{date(y, 9, 7), "Lunar Eclipse September " + itoa(y), "lunar eclipse september " + itoa(y) + " chandra grahan effects", "Vedic", 21},
-		{date(y, 3, 29), "Solar Eclipse March " + itoa(y), "solar eclipse march " + itoa(y) + " surya grahan impact rashi", "Vedic", 21},
+Use accurate dates based on the Hindu lunar calendar (tithi-based), Panchang, and astronomical data. Do NOT guess — only include events you are confident about.
 
-		// ── New Year & Annual Predictions ────────────────────────────────────────
-		{date(y, 1, 1), "New Year Predictions " + itoa(y), "astrology predictions " + itoa(y) + " all zodiac signs", "Zodiac", 14},
-		{date(y, 4, 14), "Hindu New Year " + itoa(y), "hindu new year " + itoa(y) + " panchang predictions vedic", "Vedic", 14},
+For each event return:
+- title: short event name with year (e.g. "Hanuman Jayanti 2026")
+- date: exact date in YYYY-MM-DD format
+- query: the best SEO search query to target for this event (English or Hinglish, 3-6 words, include year)
+- category: one of "Festival", "Vedic", "Zodiac"
 
-		// ── Seasonal / Monthly Horoscopes ────────────────────────────────────────
-		{date(y, 1, 1), "January Horoscope " + itoa(y), "january " + itoa(y) + " monthly horoscope all signs", "Zodiac", 7},
-		{date(y, 2, 1), "February Horoscope " + itoa(y), "february " + itoa(y) + " monthly horoscope predictions", "Zodiac", 7},
-		{date(y, 3, 1), "March Horoscope " + itoa(y), "march " + itoa(y) + " monthly horoscope rashifal", "Zodiac", 7},
-		{date(y, 4, 1), "April Horoscope " + itoa(y), "april " + itoa(y) + " monthly horoscope all zodiac", "Zodiac", 7},
-		{date(y, 5, 1), "May Horoscope " + itoa(y), "may " + itoa(y) + " monthly horoscope vedic astrology", "Zodiac", 7},
-		{date(y, 6, 1), "June Horoscope " + itoa(y), "june " + itoa(y) + " monthly horoscope career love", "Zodiac", 7},
-		{date(y, 7, 1), "July Horoscope " + itoa(y), "july " + itoa(y) + " monthly horoscope rashifal", "Zodiac", 7},
-		{date(y, 8, 1), "August Horoscope " + itoa(y), "august " + itoa(y) + " monthly horoscope predictions", "Zodiac", 7},
-		{date(y, 9, 1), "September Horoscope " + itoa(y), "september " + itoa(y) + " monthly horoscope vedic", "Zodiac", 7},
-		{date(y, 10, 1), "October Horoscope " + itoa(y), "october " + itoa(y) + " monthly horoscope all signs", "Zodiac", 7},
-		{date(y, 11, 1), "November Horoscope " + itoa(y), "november " + itoa(y) + " monthly horoscope rashifal", "Zodiac", 7},
-		{date(y, 12, 1), "December Horoscope " + itoa(y), "december " + itoa(y) + " monthly horoscope predictions", "Zodiac", 7},
+Output ONLY a valid JSON array, no explanation:
+[
+  {"title": "...", "date": "YYYY-MM-DD", "query": "...", "category": "..."},
+  ...
+]`,
+		from.Format("2006-01-02"),
+		from.Format("2006-01-02"),
+		to.Format("2006-01-02"),
+	)
+
+	resp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model: s.cfg.OpenAIModel,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "You are an expert in the Hindu Panchang, Vedic astrology calendar, and astronomical events. You know exact tithi-based dates for all Hindu festivals. Output only valid JSON arrays.",
+			},
+			{Role: openai.ChatMessageRoleUser, Content: prompt},
+		},
+		Temperature: 0.2, // low temp — we want factual dates not creative output
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch upcoming events: %w", err)
 	}
+
+	var events []upcomingEvent
+	if err := json.Unmarshal([]byte(cleanLLMJSON(resp.Choices[0].Message.Content)), &events); err != nil {
+		return nil, fmt.Errorf("parse events JSON: %w", err)
+	}
+	return events, nil
 }
 
-func date(year, month, day int) time.Time {
-	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-}
-
-func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}
-
-// handleCalendarBlogCreate generates blog posts for upcoming festivals and
-// astrological events. It publishes content early enough for Google to index
-// before the event (urgency = days before event to publish).
 func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task) error {
 	var p calendarBlogPayload
 	if err := json.Unmarshal(task.Payload(), &p); err != nil || p.MaxPosts == 0 {
@@ -105,36 +82,17 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 	}
 
 	log.Println("[calendar-blog] ─────────────────────────────────────────")
-	log.Printf("[calendar-blog] Looking for events in next %d days (max %d posts)...", p.LookAheadDays, p.MaxPosts)
+	log.Printf("[calendar-blog] Fetching upcoming events for next %d days (max %d posts)...", p.LookAheadDays, p.MaxPosts)
 
 	now := time.Now().UTC()
-	windowEnd := now.AddDate(0, 0, p.LookAheadDays)
 
-	// Build list of events we should publish for right now.
-	// "Publish window": publish when (event.Date - urgency) <= now <= event.Date
-	year := now.Year()
-	events := append(astroCalendar(year), astroCalendar(year+1)...)
-
-	var due []calendarEvent
-	for _, ev := range events {
-		publishFrom := ev.Date.AddDate(0, 0, -ev.Urgency)
-		if now.Before(publishFrom) || now.After(ev.Date) {
-			continue // not in publish window yet, or already past
-		}
-		if ev.Date.After(windowEnd) {
-			continue // too far ahead
-		}
-		due = append(due, ev)
+	events, err := s.fetchUpcomingEvents(ctx, now, p.LookAheadDays)
+	if err != nil {
+		return fmt.Errorf("calendar-blog: could not fetch events: %w", err)
 	}
+	log.Printf("[calendar-blog] OpenAI returned %d upcoming events", len(events))
 
-	log.Printf("[calendar-blog] %d events due for content in the next %d days", len(due), p.LookAheadDays)
-
-	if len(due) == 0 {
-		log.Println("[calendar-blog] Nothing to generate — no upcoming events in window")
-		return nil
-	}
-
-	// Dedup: skip events whose cluster key is already published
+	// Dedup against already-published cluster keys and headings
 	usedClusterKeys := s.loadUsedClusterKeysFromCMS()
 	existingPosts, err := s.cms.ListPosts(500, "en")
 	if err != nil {
@@ -148,25 +106,32 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 	}
 
 	created := 0
-	for _, ev := range due {
+	for _, ev := range events {
 		if created >= p.MaxPosts {
 			break
 		}
 
+		eventDate, err := time.Parse("2006-01-02", ev.Date)
+		if err != nil {
+			log.Printf("[calendar-blog]   ! bad date %q for %q, skipping", ev.Date, ev.Title)
+			continue
+		}
+		daysUntil := int(eventDate.Sub(now).Hours() / 24)
+
 		clusterKey := services.ClusterKey(ev.Query)
 		if usedClusterKeys[clusterKey] {
-			log.Printf("[calendar-blog]   ~ skip %q — cluster key %q already used", ev.Title, clusterKey)
+			log.Printf("[calendar-blog]   ~ skip %q — cluster key already used", ev.Title)
 			continue
 		}
 
-		daysUntil := int(ev.Date.Sub(now).Hours() / 24)
-		log.Printf("[calendar-blog] ── Event: %q (in %d days, query: %q) ──", ev.Title, daysUntil, ev.Query)
+		log.Printf("[calendar-blog] ── Event: %q on %s (%d days away) ──", ev.Title, ev.Date, daysUntil)
 
 		customInstructions := fmt.Sprintf(
-			"This article is for the upcoming event '%s' on %s (%d days away). "+
-				"Include the specific date. Focus on: what to do, astrological significance, "+
-				"Vedic remedies, dos and don'ts. Make it timely and actionable.",
-			ev.Title, ev.Date.Format("2 January 2006"), daysUntil,
+			"This article is for '%s' on %s (%d days away). "+
+				"Include the exact date. Cover: what the event is, astrological significance, "+
+				"Vedic remedies, puja vidhi, dos and don'ts, muhurat if applicable. "+
+				"Make it timely, specific, and actionable for someone preparing for this event.",
+			ev.Title, eventDate.Format("2 January 2006"), daysUntil,
 		)
 
 		post, err := s.generateBlogPostWithInstructions(ctx, ev.Query, 0, customInstructions)
@@ -184,7 +149,7 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 		if post.ImagePrompt != "" {
 			imgID, err := s.generateAndUploadImage(ctx, post.ImagePrompt, post.Heading)
 			if err != nil {
-				log.Printf("[calendar-blog]   ! image generation failed (continuing without): %v", err)
+				log.Printf("[calendar-blog]   ! image generation failed (continuing): %v", err)
 			} else {
 				imageID = imgID
 			}
@@ -222,7 +187,6 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 			log.Printf("[calendar-blog]   x CMS create failed: %v", err)
 			continue
 		}
-
 		log.Printf("[calendar-blog]   + Created post %s: %q (hidden, needs review)", docID, post.Heading)
 
 		topicID, err := s.cms.CreateTopic(map[string]interface{}{
@@ -243,7 +207,7 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 		created++
 	}
 
-	log.Printf("[calendar-blog] ── Summary: created %d event-based blog posts (hidden) ──", created)
+	log.Printf("[calendar-blog] ── Summary: created %d event-based posts (hidden) ──", created)
 	log.Println("[calendar-blog] ─────────────────────────────────────────")
 	return nil
 }
