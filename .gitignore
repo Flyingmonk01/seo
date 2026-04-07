@@ -1,0 +1,19 @@
+# Binary
+/bin/
+
+# Environment
+.env
+*.env
+
+# Credentials (NEVER commit these)
+gsc-credentials.json
+ga-credentials.json
+*-credentials.json
+*-service-account.json
+
+# Temporary git clones from coder agent
+/tmp/
+
+# Go
+vendor/
+*.test

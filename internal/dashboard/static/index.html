@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>91Astro SEO Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .card { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 12px; }
+    .badge-pending    { background: #7c3aed22; color: #a78bfa; border: 1px solid #7c3aed44; }
+    .badge-approved   { background: #d9770622; color: #fb923c; border: 1px solid #d9770644; }
+    .badge-live       { background: #05966922; color: #34d399; border: 1px solid #05966944; }
+    .badge-rejected   { background: #dc262622; color: #f87171; border: 1px solid #dc262644; }
+    .badge-rolled_back{ background: #dc262622; color: #f87171; border: 1px solid #dc262644; }
+    .badge-monitoring { background: #d9770622; color: #fb923c; border: 1px solid #d9770644; }
+    .badge-pr_open    { background: #1d4ed822; color: #60a5fa; border: 1px solid #1d4ed844; }
+    .badge-coding     { background: #86198f22; color: #e879f9; border: 1px solid #86198f44; }
+    .badge-researching{ background: #16475722; color: #67e8f9; border: 1px solid #16475744; }
+    .badge-planning   { background: #16475722; color: #67e8f9; border: 1px solid #16475744; }
+    .badge-success    { background: #05966922; color: #34d399; border: 1px solid #05966944; }
+    .badge-failure    { background: #dc262622; color: #f87171; border: 1px solid #dc262644; }
+    .pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .tab-active { border-bottom: 2px solid #7c3aed; color: #a78bfa; }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #1a1f2e; } ::-webkit-scrollbar-thumb { background: #4a5568; border-radius: 2px; }
+    .delta-pos { color: #34d399; } .delta-neg { color: #f87171; }
+    .spinner { border: 2px solid #2d3748; border-top-color: #7c3aed; border-radius: 50%; width: 16px; height: 16px; animation: spin 0.8s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .diff-old { background: #dc26261a; border-left: 3px solid #dc2626; }
+    .diff-new { background: #0596691a; border-left: 3px solid #059669; }
+    .char-ok { color: #34d399; } .char-warn { color: #fb923c; } .char-bad { color: #f87171; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<div class="border-b border-gray-800 px-6 py-4 flex items-center justify-between sticky top-0 z-10" style="background:#0f1117">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:linear-gradient(135deg,#7c3aed,#4f46e5)">
+      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+    </div>
+    <div>
+      <h1 class="font-semibold text-white text-sm">91Astro SEO Agent</h1>
+      <p class="text-xs text-gray-500">CMS-Driven SEO Pipeline</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-3">
+    <div id="last-updated" class="text-xs text-gray-500"></div>
+    <div id="status-dot" class="w-2 h-2 rounded-full bg-gray-500"></div>
+    <span id="status-text" class="text-xs text-gray-500">Connecting...</span>
+  </div>
+</div>
+
+<!-- Stats Bar -->
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 px-6 py-4">
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Open Issues</p>
+    <p id="s-open-issues" class="text-2xl font-bold text-white">--</p>
+    <p class="text-xs text-gray-600 mt-1">from GSC analysis</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Pending Approval</p>
+    <p id="s-pending" class="text-2xl font-bold text-yellow-400">--</p>
+    <p class="text-xs text-gray-600 mt-1">review before live</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Live Changes</p>
+    <p id="s-live-meta" class="text-2xl font-bold text-green-400">--</p>
+    <p class="text-xs text-gray-600 mt-1">pushed to CMS</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Features WIP</p>
+    <p id="s-features-wip" class="text-2xl font-bold text-purple-400">--</p>
+    <p class="text-xs text-gray-600 mt-1">dev pipeline</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Features Live</p>
+    <p id="s-features-live" class="text-2xl font-bold text-green-400">--</p>
+    <p class="text-xs text-gray-600 mt-1">deployed</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-gray-500 mb-1">Learnings</p>
+    <p id="s-learnings" class="text-2xl font-bold text-cyan-400">--</p>
+    <p class="text-xs text-gray-600 mt-1">in knowledge base</p>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="px-6">
+  <div class="flex gap-6 border-b border-gray-800 text-sm text-gray-500">
+    <button onclick="switchTab('queue')"     id="tab-queue"     class="pb-2 tab-active">Approval Queue</button>
+    <button onclick="switchTab('live')"      id="tab-live"      class="pb-2 hover:text-gray-300">Live Changes</button>
+    <button onclick="switchTab('features')"  id="tab-features"  class="pb-2 hover:text-gray-300">Features</button>
+    <button onclick="switchTab('results')"   id="tab-results"   class="pb-2 hover:text-gray-300">Impact</button>
+    <button onclick="switchTab('learnings')" id="tab-learnings" class="pb-2 hover:text-gray-300">Learnings</button>
+  </div>
+</div>
+
+<!-- Tab: Approval Queue -->
+<div id="pane-queue" class="px-6 py-4">
+  <div class="flex items-center justify-between mb-3">
+    <p class="text-sm text-gray-400">GPT-4o suggestions waiting for your review. <strong class="text-gray-300">Approve = pushes to CMS immediately.</strong></p>
+    <button onclick="loadData()" class="text-xs text-purple-400 hover:text-purple-300">Refresh</button>
+  </div>
+  <div id="queue-list" class="space-y-4">
+    <div class="card p-8 text-center text-gray-600 text-sm">Loading...</div>
+  </div>
+</div>
+
+<!-- Tab: Live Changes (with revert) -->
+<div id="pane-live" class="px-6 py-4 hidden">
+  <div class="flex items-center justify-between mb-3">
+    <p class="text-sm text-gray-400">Changes already pushed to CMS. You can <strong class="text-orange-400">revert</strong> any change to restore the original content.</p>
+    <button onclick="loadLiveChanges()" class="text-xs text-purple-400 hover:text-purple-300">Refresh</button>
+  </div>
+  <div id="live-list" class="space-y-4">
+    <div class="card p-8 text-center text-gray-600 text-sm">Loading...</div>
+  </div>
+</div>
+
+<!-- Tab: Features -->
+<div id="pane-features" class="px-6 py-4 hidden">
+  <p class="text-sm text-gray-400 mb-3">Autonomous feature development pipeline</p>
+  <div id="features-list" class="space-y-3">
+    <div class="card p-8 text-center text-gray-600 text-sm">Loading...</div>
+  </div>
+</div>
+
+<!-- Tab: Results -->
+<div id="pane-results" class="px-6 py-4 hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-3">CTR Delta (7-day)</p>
+      <canvas id="ctr-chart" height="200"></canvas>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-3">Position Delta (7-day)</p>
+      <canvas id="pos-chart" height="200"></canvas>
+    </div>
+  </div>
+  <div id="results-list" class="space-y-2">
+    <div class="card p-8 text-center text-gray-600 text-sm">Loading...</div>
+  </div>
+</div>
+
+<!-- Tab: Learnings -->
+<div id="pane-learnings" class="px-6 py-4 hidden">
+  <p class="text-sm text-gray-400 mb-3">What the AI has learned about your site</p>
+  <div id="learnings-list" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div class="card p-8 text-center text-gray-600 text-sm col-span-2">Loading...</div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-6 right-6 hidden z-50">
+  <div id="toast-inner" class="px-4 py-3 rounded-lg text-sm font-medium shadow-xl"></div>
+</div>
+
+<script>
+const API = ''
+
+let ctrChart = null, posChart = null
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+function set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val }
+
+function charClass(len, max) {
+  if (len <= max) return 'char-ok'
+  if (len <= max + 10) return 'char-warn'
+  return 'char-bad'
+}
+
+function truncUrl(url) {
+  try { return new URL(url).pathname } catch { return url }
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const diff = (Date.now() - d.getTime()) / 1000
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago'
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago'
+  return Math.floor(diff / 86400) + 'd ago'
+}
+
+function toast(msg, color) {
+  const colors = { green:'bg-green-700 text-green-100', red:'bg-red-700 text-red-100', gray:'bg-gray-700 text-gray-100', purple:'bg-purple-700 text-purple-100', orange:'bg-orange-700 text-orange-100' }
+  const t = document.getElementById('toast')
+  const inner = document.getElementById('toast-inner')
+  inner.className = `px-4 py-3 rounded-lg text-sm font-medium shadow-xl ${colors[color]||colors.gray}`
+  inner.textContent = msg
+  t.classList.remove('hidden')
+  setTimeout(() => t.classList.add('hidden'), 4000)
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────
+
+function switchTab(name) {
+  ['queue','live','features','results','learnings'].forEach(t => {
+    document.getElementById(`pane-${t}`).classList.add('hidden')
+    document.getElementById(`tab-${t}`).classList.remove('tab-active')
+    document.getElementById(`tab-${t}`).classList.add('text-gray-500')
+  })
+  document.getElementById(`pane-${name}`).classList.remove('hidden')
+  document.getElementById(`tab-${name}`).classList.add('tab-active')
+  document.getElementById(`tab-${name}`).classList.remove('text-gray-500')
+  if (name === 'live') loadLiveChanges()
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────────
+
+async function get(path) {
+  const token = localStorage.getItem('seo_token') || ''
+  const r = await fetch(API + path, { headers: { 'Authorization': 'Bearer ' + token } })
+  if (r.status === 401) { showAuthPrompt(); return null }
+  return r.ok ? r.json() : null
+}
+
+async function put(path, body) {
+  const token = localStorage.getItem('seo_token') || ''
+  const r = await fetch(API + path, {
+    method: 'PUT',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  return r.ok ? r.json() : null
+}
+
+function showAuthPrompt() {
+  const token = prompt('Enter your dashboard token:')
+  if (token) { localStorage.setItem('seo_token', token); loadData() }
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+
+async function loadStats() {
+  const data = await get('/stats')
+  if (!data) return
+  set('s-open-issues',   data.metadata?.openIssues ?? 0)
+  set('s-pending',       data.metadata?.pendingApproval ?? 0)
+  set('s-live-meta',     data.metadata?.live ?? 0)
+  set('s-features-wip',  data.features?.inProgress ?? 0)
+  set('s-features-live', data.features?.live ?? 0)
+
+  document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-green-400'
+  document.getElementById('status-text').textContent = 'Connected'
+  document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString()
+}
+
+async function loadLearningsCount() {
+  const data = await get('/learnings')
+  if (data) set('s-learnings', data.data?.length ?? 0)
+}
+
+// ── Render a suggestion card (used by queue + live tabs) ──────────────────
+
+function renderSuggestionCard(s, mode) {
+  const isLive = s.status === 'live'
+  const isPending = s.status === 'pending'
+  const isApproved = s.status === 'approved'
+
+  const curTitle = s.current?.title || '(empty)'
+  const curMeta  = s.current?.metaDescription || '(empty)'
+  const newTitle = s.proposed?.title || ''
+  const newMeta  = s.proposed?.metaDescription || ''
+  const faqs     = s.proposed?.faqSchema || []
+
+  const titleChanged = curTitle !== newTitle
+  const metaChanged  = curMeta !== newMeta
+
+  const pageUrl = s.page?.startsWith('http') ? s.page : `https://www.91astrology.com${s.page}`
+
+  return `
+  <div class="card p-5" id="sugg-${s.id}">
+    <!-- Header: Page URL + Status -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <a href="${pageUrl}" target="_blank" class="text-xs font-mono text-purple-400 hover:text-purple-300 truncate max-w-lg" title="${s.page}">
+          ${truncUrl(s.page)}
+        </a>
+        <span class="text-xs px-2 py-0.5 rounded-full badge-${s.status} flex-shrink-0">${s.status}</span>
+        ${s.pageSource ? `<span class="text-xs text-gray-600 flex-shrink-0">via ${s.pageSource}</span>` : ''}
+      </div>
+      <span class="text-xs text-gray-600 flex-shrink-0">${timeAgo(s.createdAt)}</span>
+    </div>
+
+    <!-- Title Diff -->
+    <div class="mb-4">
+      <p class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Page Title</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="p-3 rounded-lg diff-old">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] uppercase text-red-400 font-medium">Current</span>
+            <span class="text-[10px] ${charClass(curTitle.length, 60)}">${curTitle.length} chars</span>
+          </div>
+          <p class="text-sm text-gray-200">${escHtml(curTitle)}</p>
+        </div>
+        <div class="p-3 rounded-lg diff-new">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] uppercase text-green-400 font-medium">Proposed</span>
+            <span class="text-[10px] ${charClass(newTitle.length, 60)}">${newTitle.length} chars</span>
+          </div>
+          <p class="text-sm text-white font-medium">${escHtml(newTitle)}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meta Description Diff -->
+    <div class="mb-4">
+      <p class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Meta Description</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="p-3 rounded-lg diff-old">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] uppercase text-red-400 font-medium">Current</span>
+            <span class="text-[10px] ${charClass(curMeta.length, 160)}">${curMeta.length} chars</span>
+          </div>
+          <p class="text-xs text-gray-300 leading-relaxed">${escHtml(curMeta)}</p>
+        </div>
+        <div class="p-3 rounded-lg diff-new">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] uppercase text-green-400 font-medium">Proposed</span>
+            <span class="text-[10px] ${charClass(newMeta.length, 160)}">${newMeta.length} chars</span>
+          </div>
+          <p class="text-xs text-gray-200 leading-relaxed">${escHtml(newMeta)}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- FAQ Schema (fully expanded) -->
+    ${faqs.length ? `
+    <div class="mb-4">
+      <p class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">
+        FAQ Schema <span class="text-blue-400">(${faqs.length} items)</span>
+      </p>
+      <div class="space-y-2">
+        ${faqs.map((f, i) => `
+        <div class="p-3 rounded-lg bg-blue-950/20 border border-blue-900/20">
+          <p class="text-xs text-blue-300 font-medium mb-1">Q${i+1}: ${escHtml(f.question)}</p>
+          <p class="text-xs text-gray-400 leading-relaxed">${escHtml(f.answer)}</p>
+        </div>
+        `).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Google Preview -->
+    <div class="mb-4">
+      <p class="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Google Preview (proposed)</p>
+      <div class="p-3 rounded-lg bg-white/5 border border-gray-700 max-w-xl">
+        <p class="text-blue-400 text-sm font-medium truncate">${escHtml(newTitle || curTitle)}</p>
+        <p class="text-green-600 text-xs truncate">${truncUrl(s.page)}</p>
+        <p class="text-gray-400 text-xs mt-1 line-clamp-2">${escHtml(newMeta || curMeta)}</p>
+      </div>
+    </div>
+
+    <!-- Model info -->
+    <div class="flex items-center gap-4 text-[10px] text-gray-600 mb-4">
+      ${s.generatedBy ? `<span>Model: <code class="text-gray-500">${s.generatedBy}</code></span>` : ''}
+      ${s.cmsPageId ? `<span>CMS ID: <code class="text-gray-500">${s.cmsPageId}</code></span>` : ''}
+      ${s.createdAt ? `<span>Generated: ${new Date(s.createdAt).toLocaleString()}</span>` : ''}
+    </div>
+
+    <!-- Action buttons -->
+    <div class="flex items-center gap-3 pt-3 border-t border-gray-800">
+      ${isPending || isApproved ? `
+        <button onclick="approve('${s.id}')" id="btn-approve-${s.id}"
+          class="px-4 py-2 rounded-lg text-xs font-semibold bg-green-600 hover:bg-green-500 text-white transition-colors">
+          Approve & Push to CMS
+        </button>
+        <button onclick="reject('${s.id}')"
+          class="px-4 py-2 rounded-lg text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+          Reject
+        </button>
+      ` : ''}
+      ${isLive ? `
+        <button onclick="revert('${s.id}')" id="btn-revert-${s.id}"
+          class="px-4 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors">
+          Revert to Previous
+        </button>
+        <span class="text-xs text-gray-600">This will restore the original title & description in CMS</span>
+      ` : ''}
+    </div>
+  </div>`
+}
+
+function escHtml(str) {
+  if (!str) return ''
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+// ── Queue (pending suggestions) ───────────────────────────────────────────
+
+async function loadQueue() {
+  const data = await get('/queue')
+  const el = document.getElementById('queue-list')
+  if (!data || !data.data?.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">
+      No pending suggestions. Next generation runs Sunday 9am UTC.
+    </div>`
+    return
+  }
+
+  // Only show pending/approved items in queue tab
+  const pending = data.data.filter(s => s.status === 'pending' || s.status === 'approved')
+  if (!pending.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">All suggestions have been reviewed.</div>`
+    return
+  }
+
+  el.innerHTML = pending.map(s => renderSuggestionCard(s, 'queue')).join('')
+}
+
+// ── Live changes (with revert) ────────────────────────────────────────────
+
+async function loadLiveChanges() {
+  const data = await get('/queue')
+  const el = document.getElementById('live-list')
+  if (!data || !data.data?.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">No live changes yet.</div>`
+    return
+  }
+
+  const live = data.data.filter(s => s.status === 'live')
+  if (!live.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">No live changes to show.</div>`
+    return
+  }
+
+  el.innerHTML = live.map(s => renderSuggestionCard(s, 'live')).join('')
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────
+
+async function approve(id) {
+  const btn = document.getElementById(`btn-approve-${id}`)
+  if (!btn) return
+  const orig = btn.innerHTML
+  btn.innerHTML = '<span class="spinner"></span> Pushing to CMS...'
+  btn.disabled = true
+
+  const result = await put(`/queue/approve/${id}`, {})
+  if (result && result.success) {
+    if (result.warning) {
+      toast('Approved but push failed: ' + result.warning, 'orange')
+      btn.innerHTML = orig
+      btn.disabled = false
+    } else {
+      toast('Approved & pushed to CMS. ISR cache busted.', 'green')
+      document.getElementById(`sugg-${id}`)?.remove()
+      loadStats()
+    }
+  } else {
+    toast('Failed to approve', 'red')
+    btn.innerHTML = orig
+    btn.disabled = false
+  }
+}
+
+async function reject(id) {
+  const reason = prompt('Reason for rejection (optional):') ?? ''
+  const result = await put(`/queue/reject/${id}`, { reason })
+  if (result) {
+    document.getElementById(`sugg-${id}`)?.remove()
+    toast('Rejected', 'gray')
+    loadStats()
+  }
+}
+
+async function revert(id) {
+  if (!confirm('This will restore the ORIGINAL title & description in CMS.\n\nAre you sure?')) return
+
+  const btn = document.getElementById(`btn-revert-${id}`)
+  if (!btn) return
+  const orig = btn.innerHTML
+  btn.innerHTML = '<span class="spinner"></span> Reverting...'
+  btn.disabled = true
+
+  const result = await put(`/queue/revert/${id}`, {})
+  if (result && result.success) {
+    toast('Reverted to original content in CMS', 'orange')
+    document.getElementById(`sugg-${id}`)?.remove()
+    loadStats()
+  } else {
+    toast('Revert failed', 'red')
+    btn.innerHTML = orig
+    btn.disabled = false
+  }
+}
+
+// ── Features ──────────────────────────────────────────────────────────────
+
+const statusOrder = ['researching','planning','coding','pr_open','monitoring','live','rolled_back']
+
+async function loadFeatures() {
+  const data = await get('/features')
+  const el = document.getElementById('features-list')
+  if (!data || !data.data?.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">No features in pipeline. Research runs Mondays at 8am.</div>`
+    return
+  }
+  el.innerHTML = data.data.map(f => {
+    const plan = f.plan
+    const latestResult = f.monitorResults?.[f.monitorResults.length-1]
+    return `
+    <div class="card p-4">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <span class="text-sm font-medium text-white">${plan?.title || 'Researching...'}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full badge-${f.status}">${f.status}</span>
+          </div>
+          <div class="flex items-center gap-1 mb-3">
+            ${statusOrder.map(st => `<div class="h-1 flex-1 rounded-full ${statusOrder.indexOf(f.status) >= statusOrder.indexOf(st) ? 'bg-purple-500' : 'bg-gray-700'}"></div>`).join('')}
+          </div>
+          <p class="text-xs text-gray-400 mb-1">${f.page}</p>
+          ${plan?.hypothesis ? `<p class="text-xs text-gray-500 italic">"${plan.hypothesis}"</p>` : ''}
+          ${f.prUrl ? `<a href="${f.prUrl}" target="_blank" class="text-xs text-blue-400 hover:text-blue-300 mt-1 inline-block">View PR</a>` : ''}
+          ${latestResult ? `
+          <div class="mt-2 flex gap-4 text-xs">
+            <span class="${latestResult.bounceRateDelta < 0 ? 'delta-pos' : 'delta-neg'}">Bounce ${latestResult.bounceRateDelta > 0 ? '+' : ''}${latestResult.bounceRateDelta?.toFixed(1)}%</span>
+            <span class="${latestResult.conversionDelta > 0 ? 'delta-pos' : 'delta-neg'}">Conv ${latestResult.conversionDelta > 0 ? '+' : ''}${latestResult.conversionDelta?.toFixed(2)}%</span>
+            <span class="text-gray-500">${latestResult.window}d window</span>
+          </div>` : ''}
+        </div>
+        ${f.status === 'pr_open' ? `
+        <button onclick="enableFlag('${f.id}')" class="px-3 py-1.5 rounded-lg text-xs bg-purple-700 hover:bg-purple-600 text-white">Enable Flag (5%)</button>
+        ` : ''}
+      </div>
+    </div>`
+  }).join('')
+}
+
+async function enableFlag(featureId) {
+  const ok = await put(`/features/${featureId}/flag`, { enabled: true, rolloutPercent: 5 })
+  if (ok) { toast('Feature flag enabled at 5%', 'purple'); loadData() }
+  else toast('Failed to enable flag', 'red')
+}
+
+// ── Results ───────────────────────────────────────────────────────────────
+
+async function loadResults() {
+  const data = await get('/results')
+  const el = document.getElementById('results-list')
+  if (!data || !data.data?.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm">No impact data yet. Results appear 7 days after changes go live.</div>`
+    renderCharts([])
+    return
+  }
+  const results = data.data
+  renderCharts(results)
+  el.innerHTML = `
+    <div class="card overflow-hidden">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="border-b border-gray-800 text-gray-500">
+            <th class="text-left p-3">Page</th>
+            <th class="text-right p-3">Window</th>
+            <th class="text-right p-3">CTR Before</th>
+            <th class="text-right p-3">CTR After</th>
+            <th class="text-right p-3">CTR Delta</th>
+            <th class="text-right p-3">Pos Delta</th>
+            <th class="text-right p-3">Clicks Delta</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map(r => `
+            <tr class="border-b border-gray-800/50 hover:bg-gray-800/20">
+              <td class="p-3 font-mono text-gray-400 max-w-xs truncate">${truncUrl(r.page)}</td>
+              <td class="p-3 text-right text-gray-500">${r.window}d</td>
+              <td class="p-3 text-right text-gray-400">${r.before?.ctr?.toFixed(2)}%</td>
+              <td class="p-3 text-right text-gray-400">${r.after?.ctr?.toFixed(2)}%</td>
+              <td class="p-3 text-right font-medium ${r.delta?.ctrDelta >= 0 ? 'delta-pos' : 'delta-neg'}">${r.delta?.ctrDelta >= 0 ? '+' : ''}${r.delta?.ctrDelta?.toFixed(2)}%</td>
+              <td class="p-3 text-right font-medium ${r.delta?.positionDelta <= 0 ? 'delta-pos' : 'delta-neg'}">${r.delta?.positionDelta > 0 ? '+' : ''}${r.delta?.positionDelta?.toFixed(1)}</td>
+              <td class="p-3 text-right font-medium ${r.delta?.clicksDelta >= 0 ? 'delta-pos' : 'delta-neg'}">${r.delta?.clicksDelta >= 0 ? '+' : ''}${r.delta?.clicksDelta}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`
+}
+
+function renderCharts(results) {
+  const labels = results.map(r => truncUrl(r.page).substring(0,25))
+  const ctrData = results.map(r => r.delta?.ctrDelta ?? 0)
+  const posData = results.map(r => r.delta?.positionDelta ?? 0)
+  const chartOpts = (label, data, color) => ({
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label, data, backgroundColor: data.map(v => v >= 0 ? color+'88' : '#ef444488'), borderColor: data.map(v => v >= 0 ? color : '#ef4444'), borderWidth: 1, borderRadius: 4 }]
+    },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } }, y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1f2937' } } } }
+  })
+  if (ctrChart) ctrChart.destroy()
+  if (posChart) posChart.destroy()
+  const c1 = document.getElementById('ctr-chart')
+  const c2 = document.getElementById('pos-chart')
+  if (c1 && results.length) ctrChart = new Chart(c1, chartOpts('CTR Delta %', ctrData, '#34d399'))
+  if (c2 && results.length) posChart = new Chart(c2, chartOpts('Position Delta', posData, '#60a5fa'))
+}
+
+// ── Learnings ─────────────────────────────────────────────────────────────
+
+async function loadLearnings() {
+  const data = await get('/learnings')
+  const el = document.getElementById('learnings-list')
+  set('s-learnings', data?.data?.length ?? 0)
+  if (!data || !data.data?.length) {
+    el.innerHTML = `<div class="card p-8 text-center text-gray-600 text-sm col-span-2">No learnings yet.</div>`
+    return
+  }
+  el.innerHTML = data.data.map(l => `
+    <div class="card p-4">
+      <div class="flex items-start justify-between mb-2">
+        <span class="text-xs px-2 py-0.5 rounded-full badge-${l.outcome}">${l.outcome}</span>
+        <span class="text-[10px] text-gray-600">${l.pageType}</span>
+      </div>
+      <p class="text-xs text-white font-medium mb-1">${l.featureType}</p>
+      <p class="text-xs text-gray-500 italic mb-3">"${l.hypothesis}"</p>
+      <div class="flex gap-3 text-xs">
+        <span class="${l.metrics?.bounceRateDelta < 0 ? 'delta-pos' : 'delta-neg'}">Bounce ${l.metrics?.bounceRateDelta > 0 ? '+' : ''}${l.metrics?.bounceRateDelta?.toFixed(1)}%</span>
+        <span class="${l.metrics?.conversionDelta > 0 ? 'delta-pos' : 'delta-neg'}">Conv ${l.metrics?.conversionDelta > 0 ? '+' : ''}${l.metrics?.conversionDelta?.toFixed(2)}%</span>
+      </div>
+      <p class="text-[10px] text-gray-600 mt-2">${new Date(l.learnedAt).toLocaleDateString()}</p>
+    </div>
+  `).join('')
+}
+
+// ── Load all ──────────────────────────────────────────────────────────────
+
+async function loadData() {
+  await Promise.all([loadStats(), loadQueue(), loadLearningsCount(), loadFeatures(), loadResults(), loadLearnings()])
+}
+
+loadData()
+setInterval(loadData, 60000) // refresh every minute
+</script>
+</body>
+</html>
