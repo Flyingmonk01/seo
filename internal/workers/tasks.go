@@ -22,6 +22,7 @@ const (
 	TaskInternalLink   = "seo:internal_link"
 
 	// Pipeline 4: Daily Blog Content Generation
-	TaskDailyBlogCreate  = "seo:daily_blog_create"
-	TaskRegenerateBlog   = "seo:regenerate_blog"
+	TaskDailyBlogCreate    = "seo:daily_blog_create"
+	TaskRegenerateBlog     = "seo:regenerate_blog"
+	TaskCalendarBlogCreate = "seo:calendar_blog_create"
 )

@@ -22,18 +22,21 @@ type dailyBlogPayload struct {
 	MaxPosts int `json:"max_posts"`
 }
 
-// loadUsedClusterKeysFromCMS loads all cluster keys already used for blog topics from CMS.
+// loadUsedClusterKeysFromCMS loads cluster keys that are blocked from re-use.
+// Rejected topics free up their cluster key so a different angle can be tried.
 // Falls back to empty map on error so generation still proceeds.
 func (s *Server) loadUsedClusterKeysFromCMS() map[string]bool {
-	topics, err := s.cms.ListTopics("", 1000)
 	used := map[string]bool{}
-	if err != nil {
-		log.Printf("[daily-blog] WARN: could not load CMS topics for dedup: %v", err)
-		return used
-	}
-	for _, t := range topics {
-		if ck, ok := t["clusterKey"].(string); ok && ck != "" {
-			used[ck] = true
+	for _, status := range []string{"pending", "approved", "live", "regenerating"} {
+		topics, err := s.cms.ListTopics(status, 1000)
+		if err != nil {
+			log.Printf("[daily-blog] WARN: could not load CMS topics (status=%s) for dedup: %v", status, err)
+			continue
+		}
+		for _, t := range topics {
+			if ck, ok := t["clusterKey"].(string); ok && ck != "" {
+				used[ck] = true
+			}
 		}
 	}
 	return used
@@ -51,8 +54,11 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 	// ── Step 1: Find content gaps from GSC data ──────────────────────────────
 
 	rawCol := s.db.Collection(models.ColRawData)
-	candidateLimit := int64(p.MaxPosts * 5)
+	candidateLimit := int64(p.MaxPosts * 20) // wider pool to find unused clusters
 
+	// Content gap: queries with any search demand we don't rank well for.
+	// - impressions >= 10 catches long-tail queries (easier to rank, less competition)
+	// - position >= 5 includes page-1 bottom results that could be improved
 	pipeline := []bson.D{
 		{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: "$query"},
@@ -62,8 +68,8 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 			{Key: "pages", Value: bson.D{{Key: "$addToSet", Value: "$page"}}},
 		}}},
 		{{Key: "$match", Value: bson.D{
-			{Key: "totalImpressions", Value: bson.D{{Key: "$gte", Value: 50}}},
-			{Key: "avgPosition", Value: bson.D{{Key: "$gte", Value: 8}}},
+			{Key: "totalImpressions", Value: bson.D{{Key: "$gte", Value: 10}}},
+			{Key: "avgPosition", Value: bson.D{{Key: "$gte", Value: 5}}},
 		}}},
 		{{Key: "$sort", Value: bson.D{{Key: "totalImpressions", Value: -1}}}},
 		{{Key: "$limit", Value: candidateLimit}},

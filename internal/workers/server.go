@@ -84,6 +84,7 @@ func (s *Server) Start() error {
 	// Pipeline 4: Daily Blog Content Generation
 	mux.HandleFunc(TaskDailyBlogCreate, s.handleDailyBlogCreate)
 	mux.HandleFunc(TaskRegenerateBlog, s.handleRegenerateBlog)
+	mux.HandleFunc(TaskCalendarBlogCreate, s.handleCalendarBlogCreate)
 
 	return s.asynqServer.Run(mux)
 }

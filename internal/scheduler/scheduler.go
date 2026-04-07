@@ -51,8 +51,12 @@ func (s *Scheduler) Start() {
 
 	// ── Pipeline 4: Daily Blog Content Generation ────────────────────────────
 
-	// Daily 07:00 — create 5 new blog posts targeting content gaps
-	s.register("0 7 * * *", workers.TaskDailyBlogCreate, map[string]int{"max_posts": 5}, "default")
+	// Daily 07:00 — create 10 new blog posts targeting content gaps
+	s.register("0 7 * * *", workers.TaskDailyBlogCreate, map[string]int{"max_posts": 10}, "default")
+
+	// Daily 07:30 — create blog posts for upcoming festivals, retrogrades, eclipses
+	// Looks 45 days ahead; publishes content within the urgency window for each event
+	s.register("30 7 * * *", workers.TaskCalendarBlogCreate, map[string]interface{}{"max_posts": 5, "look_ahead_days": 45}, "default")
 
 	if err := s.asynqSched.Run(); err != nil {
 		log.Fatalf("Scheduler failed: %v", err)
