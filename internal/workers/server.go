@@ -24,6 +24,7 @@ type Server struct {
 	cms         *services.CMSService
 	analytics   *services.AnalyticsService
 	mail        *services.MailService
+	prokerala   *services.ProkeralaService
 
 	// Agent layer
 	seoAgent *agent.SEOAgent
@@ -55,6 +56,7 @@ func NewServer(redisAddr string, db *mongo.Database, cfg *config.Config) *Server
 		execute:   services.NewExecuteService(cfg.NextRevalidateURL, cfg.RevalidateSecret, services.NewCMSService(cfg.CMSURL, cfg.CMSEmail, cfg.CMSPassword)),
 		analytics: services.NewAnalyticsService(cfg.GAPropertyID, cfg.GACredentialsPath, cfg.DatadogAPIKey, cfg.DatadogAppKey),
 		mail:      services.NewMailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword),
+		prokerala: services.NewProkeralaService(cfg.ProkeralaClientID, cfg.ProkeralaClientSecret),
 		seoAgent:  agent.NewSEOAgent(services.NewOpenAIService(cfg.OpenAIAPIKey, cfg.OpenAIModel)),
 	}
 }

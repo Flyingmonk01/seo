@@ -58,6 +58,10 @@ type Config struct {
 	// Datadog
 	DatadogAPIKey string
 	DatadogAppKey string
+
+	// Prokerala Astrology API (astrological events — retrogrades, planetary positions)
+	ProkeralaClientID     string
+	ProkeralaClientSecret string
 }
 
 func Load() *Config {
@@ -105,6 +109,9 @@ func Load() *Config {
 
 		DatadogAPIKey: getEnv("DATADOG_API_KEY", ""),
 		DatadogAppKey: getEnv("DATADOG_APP_KEY", ""),
+
+		ProkeralaClientID:     getEnv("PROKERALA_CLIENT_ID", ""),
+		ProkeralaClientSecret: getEnv("PROKERALA_CLIENT_SECRET", ""),
 	}
 }
 
