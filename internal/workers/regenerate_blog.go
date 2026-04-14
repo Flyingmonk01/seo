@@ -86,7 +86,7 @@ func (s *Server) handleRegenerateBlog(ctx context.Context, task *asynq.Task) err
 			heading = p.Query
 		}
 
-		imagePrompt := fmt.Sprintf("A visually stunning, professional blog featured image for an article about: %s. Indian Vedic astrology aesthetic, warm colors, celestial elements, no text in image.", p.Query)
+		imagePrompt := fmt.Sprintf("A visually striking, photorealistic featured image that directly represents: %s. The image must depict the specific subject matter — show relevant symbols, cosmic elements, or scenes tied to the topic. Do NOT show generic diyas, puja thalis, or temple scenes unless the topic is specifically about puja or temples. Use cinematic lighting, rich saturated colors, and a clean composition. No text or watermarks in the image.", p.Query)
 		if p.CustomInstructions != "" {
 			imagePrompt = fmt.Sprintf("%s Style guidance: %s", imagePrompt, p.CustomInstructions)
 		}

@@ -229,7 +229,15 @@ Rules:
    GOOD section: "Vrat kholne ka sahi samay kya hai?" / "Which nakshatra people are most affected?"
    BAD section: "Understanding the Significance" / "The Importance of Rituals"
 4. List 6-8 Hindi/Sanskrit terms readers would search for (e.g., "ekadashi vrat vidhi", "parana time", "nirjala ekadashi").
-5. Image: describe a warm, realistic Indian spiritual scene (temple, diya, puja thali, etc). No text in image.
+5. Image prompt: Write a DALL-E prompt for a unique featured image that is SPECIFIC to the blog topic. The image must visually represent the actual subject of the article — not a generic spiritual scene.
+   - If the topic is about a zodiac sign → show its symbol, constellation, or associated imagery
+   - If the topic is about a planet (Shani, Rahu, etc.) → show the planet, its yantra, or cosmic imagery
+   - If the topic is about a festival → show the specific festival scene (e.g., Holi colors, Diwali fireworks, Navratri garba)
+   - If the topic is about palmistry → show hands with lines highlighted
+   - If the topic is about vastu → show architectural/home layout imagery
+   - If the topic is about numerology → show numbers with mystical/cosmic styling
+   - NEVER default to a generic diya, puja thali, or temple scene unless the article is specifically about puja or temple worship
+   - Style: cinematic lighting, rich colors, photorealistic or high-quality digital art. No text or watermarks in the image.
 
 LANGUAGE: Write the heading and metaTitle in natural Hinglish (Hindi words in Roman script mixed with English). The metaDescription should be in English for SEO.
 
@@ -245,7 +253,7 @@ Output ONLY valid JSON (no markdown fences):
   "metaDescription": "English meta desc, max 155 chars, include topic + action word",
   "sections": ["Section 1 as question/claim", "Section 2", ...],
   "keyTerms": ["hindi/sanskrit term 1", "term 2", ...],
-  "imagePrompt": "realistic Indian spiritual scene description for image generation, warm colors, no text"
+  "imagePrompt": "detailed DALL-E prompt specific to the blog topic — describe the exact visual scene, subject matter, composition, and art style. No generic spiritual imagery. No text in image."
 }`,
 		today,
 		targetQuery,
