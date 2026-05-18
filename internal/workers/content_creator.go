@@ -129,6 +129,21 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 			continue
 		}
 
+		// Featured image — CMS Posts requires it. Fall back to a heading-derived
+		// prompt if the strategist omitted imagePrompt, and skip the post if
+		// generation/upload fails.
+		imagePrompt := post.ImagePrompt
+		if imagePrompt == "" {
+			imagePrompt = fmt.Sprintf("Warm realistic Indian spiritual scene illustrating: %s. Soft golden lighting, temple or puja setting, no text.", post.Heading)
+			log.Printf("[content-creator]   ~ strategist omitted imagePrompt — using heading-based fallback")
+		}
+		imageID, err := s.generateAndUploadImage(ctx, imagePrompt, post.Heading)
+		if err != nil {
+			log.Printf("[content-creator]   ✗ image generation failed, skipping post (CMS requires image): %v", err)
+			continue
+		}
+		log.Printf("[content-creator]   + Featured image uploaded: %s", imageID)
+
 		categoryRelID := s.resolveCategoryID(post.Category)
 		authorID := s.resolveAuthorID()
 
@@ -141,6 +156,7 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 			"Content":    post.Content,
 			"Paragraph":  post.Paragraphs,
 			"Identifier": "en",
+			"image":      imageID,
 			"isHidden":   true, // start hidden — human reviews before publishing
 			"meta": map[string]string{
 				"title":       post.MetaTitle,

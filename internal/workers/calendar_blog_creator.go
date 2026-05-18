@@ -350,23 +350,28 @@ func (s *Server) handleCalendarBlogCreate(ctx context.Context, task *asynq.Task)
 			continue
 		}
 
-		var imageID string
-		if post.ImagePrompt != "" {
-			if imgID, err := s.generateAndUploadImage(ctx, post.ImagePrompt, post.Heading); err != nil {
-				log.Printf("[calendar-blog]   ! image failed: %v", err)
-			} else {
-				imageID = imgID
-			}
+		// CMS Posts requires `image` — fall back to a heading-based prompt
+		// if the strategist omitted imagePrompt, and skip the post if gen fails.
+		imagePrompt := post.ImagePrompt
+		if imagePrompt == "" {
+			imagePrompt = fmt.Sprintf("Warm realistic Indian spiritual scene illustrating: %s. Soft golden lighting, temple or puja setting, no text.", post.Heading)
+			log.Printf("[calendar-blog]   ~ strategist omitted imagePrompt — using heading-based fallback")
 		}
+		imageID, err := s.generateAndUploadImage(ctx, imagePrompt, post.Heading)
+		if err != nil {
+			log.Printf("[calendar-blog]   x image generation failed, skipping post (CMS requires image): %v", err)
+			continue
+		}
+		log.Printf("[calendar-blog]   + Featured image uploaded: %s", imageID)
 
 		cmsPost := map[string]interface{}{
 			"title": post.Heading, "Heading": post.Heading,
 			"Date": now.Format("2 January 2006"), "Category": ev.Category,
 			"Content": post.Content, "Paragraph": post.Paragraphs,
 			"Identifier": "en", "isHidden": true,
-			"meta": map[string]string{"title": post.MetaTitle, "description": post.MetaDescription},
+			"image":      imageID,
+			"meta":       map[string]string{"title": post.MetaTitle, "description": post.MetaDescription},
 		}
-		if imageID != "" { cmsPost["image"] = imageID }
 		if id := s.resolveAuthorID(); id != "" { cmsPost["author"] = id }
 		if id := s.resolveCategoryID(ev.Category); id != "" { cmsPost["category"] = id }
 

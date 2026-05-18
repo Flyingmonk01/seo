@@ -2,11 +2,10 @@ package workers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
@@ -186,16 +185,21 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 			continue
 		}
 
-		var imageID string
-		if post.ImagePrompt != "" {
-			imgID, err := s.generateAndUploadImage(ctx, post.ImagePrompt, post.Heading)
-			if err != nil {
-				log.Printf("[daily-blog]   ! image generation failed (continuing without image): %v", err)
-			} else {
-				imageID = imgID
-				log.Printf("[daily-blog]   + Featured image uploaded: %s", imageID)
-			}
+		// CMS Posts requires `image`, so we must produce one. Fall back to a
+		// heading-derived prompt when the strategist LLM omitted imagePrompt,
+		// and skip the post entirely if generation/upload fails (don't push
+		// payloads the CMS will reject).
+		imagePrompt := post.ImagePrompt
+		if imagePrompt == "" {
+			imagePrompt = fmt.Sprintf("Warm realistic Indian spiritual scene illustrating: %s. Soft golden lighting, temple or puja setting, no text.", post.Heading)
+			log.Printf("[daily-blog]   ~ strategist omitted imagePrompt — using heading-based fallback")
 		}
+		imageID, err := s.generateAndUploadImage(ctx, imagePrompt, post.Heading)
+		if err != nil {
+			log.Printf("[daily-blog]   x image generation failed, skipping post (CMS requires image): %v", err)
+			continue
+		}
+		log.Printf("[daily-blog]   + Featured image uploaded: %s", imageID)
 
 		categoryRelID := s.resolveCategoryID(post.Category)
 		authorID := s.resolveAuthorID()
@@ -272,34 +276,28 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 	return nil
 }
 
-// generateAndUploadImage creates a featured image via DALL-E 3, downloads it,
-// and uploads it to the CMS Media collection. Returns the media document ID.
+// generateAndUploadImage creates a featured image via gpt-image-1 and uploads
+// it to the CMS Media collection. Returns the media document ID.
+// gpt-image-1 always returns base64 — it does not support response_format=url,
+// style, or quality=standard/hd.
 func (s *Server) generateAndUploadImage(ctx context.Context, imagePrompt, heading string) (string, error) {
 	imgResp, err := s.openai.Client().CreateImage(ctx, openai.ImageRequest{
-		Prompt:         imagePrompt,
-		Model:          openai.CreateImageModelDallE3,
-		N:              1,
-		Size:           openai.CreateImageSize1792x1024,
-		Quality:        openai.CreateImageQualityStandard,
-		Style:          openai.CreateImageStyleNatural,
-		ResponseFormat: openai.CreateImageResponseFormatURL,
+		Prompt:  imagePrompt,
+		Model:   "gpt-image-1",
+		N:       1,
+		Size:    "1536x1024", // landscape; gpt-image-1 does not support 1792x1024
+		Quality: "high",      // gpt-image-1 accepts low|medium|high|auto
 	})
 	if err != nil {
-		return "", fmt.Errorf("dall-e generation: %w", err)
+		return "", fmt.Errorf("gpt-image-1 generation: %w", err)
 	}
-	if len(imgResp.Data) == 0 {
-		return "", fmt.Errorf("dall-e returned no images")
+	if len(imgResp.Data) == 0 || imgResp.Data[0].B64JSON == "" {
+		return "", fmt.Errorf("gpt-image-1 returned no image data")
 	}
 
-	httpResp, err := http.Get(imgResp.Data[0].URL)
+	imageData, err := base64.StdEncoding.DecodeString(imgResp.Data[0].B64JSON)
 	if err != nil {
-		return "", fmt.Errorf("download generated image: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	imageData, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read image body: %w", err)
+		return "", fmt.Errorf("decode base64 image: %w", err)
 	}
 
 	slug := strings.ToLower(strings.ReplaceAll(heading, " ", "-"))
