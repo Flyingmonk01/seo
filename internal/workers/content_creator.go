@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/91astro/seo-agent/internal/models"
+	"github.com/91astro/seo-agent/internal/services"
 	"github.com/hibiken/asynq"
-	"go.mongodb.org/mongo-driver/bson"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -27,56 +27,72 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 	}
 
 	log.Println("[content-creator] ─────────────────────────────────────────")
-	log.Printf("[content-creator] Creating up to %d new blog posts for content gaps...", p.MaxPosts)
+	log.Printf("[content-creator] Creating up to %d new blog posts from trending GSC queries...", p.MaxPosts)
 
-	rawCol := s.db.Collection(models.ColRawData)
-
-	// Find high-impression queries that don't match any existing page on the site.
-	// These are content gaps — queries people search for but we have no page for.
-	pipeline := []bson.D{
-		{{Key: "$group", Value: bson.D{
-			{Key: "_id", Value: "$query"},
-			{Key: "totalImpressions", Value: bson.D{{Key: "$sum", Value: "$impressions"}}},
-			{Key: "totalClicks", Value: bson.D{{Key: "$sum", Value: "$clicks"}}},
-			{Key: "avgPosition", Value: bson.D{{Key: "$avg", Value: "$position"}}},
-			{Key: "pages", Value: bson.D{{Key: "$addToSet", Value: "$page"}}},
-		}}},
-		{{Key: "$match", Value: bson.D{
-			{Key: "totalImpressions", Value: bson.D{{Key: "$gte", Value: 100}}},
-			{Key: "avgPosition", Value: bson.D{{Key: "$gte", Value: 10}}}, // we rank poorly
-		}}},
-		{{Key: "$sort", Value: bson.D{{Key: "totalImpressions", Value: -1}}}},
-		{{Key: "$limit", Value: int64(p.MaxPosts * 3)}}, // fetch extra to filter
-	}
-
-	cursor, err := rawCol.Aggregate(ctx, pipeline)
+	// Pull trending organic queries directly from GSC (last 7d vs prior 7d).
+	// This avoids the stale Mongo aggregate which surfaced low-volume gaps.
+	trending, err := s.gsc.FetchTrendingQueries(ctx, 7, 30)
 	if err != nil {
-		return fmt.Errorf("content gap aggregate: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var gaps []struct {
-		Query            string   `bson:"_id"`
-		TotalImpressions int64    `bson:"totalImpressions"`
-		TotalClicks      int64    `bson:"totalClicks"`
-		AvgPosition      float64  `bson:"avgPosition"`
-		Pages            []string `bson:"pages"`
-	}
-	if err := cursor.All(ctx, &gaps); err != nil {
-		return err
+		return fmt.Errorf("content-creator trending fetch: %w", err)
 	}
 
-	// Fetch existing posts to avoid duplicates
+	type gapCandidate struct {
+		Query            string
+		TotalImpressions int64
+		TotalClicks      int64
+		AvgPosition      float64
+		GrowthRatio      float64
+	}
+	var gaps []gapCandidate
+	candidateLimit := p.MaxPosts * 10
+	for _, t := range trending {
+		// Skip queries already ranking well — they don't need a new page.
+		if t.AvgPosition > 0 && t.AvgPosition <= 3 {
+			continue
+		}
+		gaps = append(gaps, gapCandidate{
+			Query:            t.Query,
+			TotalImpressions: t.RecentImpressions,
+			TotalClicks:      t.RecentClicks,
+			AvgPosition:      t.AvgPosition,
+			GrowthRatio:      t.GrowthRatio,
+		})
+		if len(gaps) >= candidateLimit {
+			break
+		}
+	}
+
+	// Fetch existing posts to avoid duplicates and count per-category distribution
 	existingPosts, err := s.cms.ListPosts(500, "en")
 	if err != nil {
 		log.Printf("[content-creator] WARN: could not list existing posts: %v", err)
 	}
 	existingHeadings := map[string]bool{}
+	var existingHeadingsList []string
+	categoryIDCounts := map[string]int{}
 	for _, post := range existingPosts {
 		if h, ok := post["Heading"].(string); ok {
 			existingHeadings[strings.ToLower(h)] = true
+			existingHeadingsList = append(existingHeadingsList, h)
+		}
+		if catID, ok := post["category"].(string); ok && catID != "" {
+			categoryIDCounts[catID]++
 		}
 	}
+
+	// Fetch real categories from CMS and build name→count map using CMS IDs
+	cmsCategoryMap := s.fetchCMSCategories()
+	var cmsCategories []string
+	categoryCounts := map[string]int{}
+	for _, cat := range cmsCategoryMap {
+		cmsCategories = append(cmsCategories, cat.Name)
+		categoryCounts[strings.ToLower(cat.Name)] = categoryIDCounts[cat.ID]
+	}
+	log.Printf("[content-creator] CMS categories: %v", cmsCategories)
+
+	// Cluster key dedup — avoid generating posts for queries that already have coverage
+	usedClusterKeys := s.loadUsedClusterKeysFromCMS()
+	log.Printf("[content-creator] %d cluster keys already used", len(usedClusterKeys))
 
 	log.Printf("[content-creator] Found %d potential content gaps", len(gaps))
 
@@ -91,11 +107,17 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 			continue
 		}
 
-		log.Printf("[content-creator] ── Gap: %q (%d impressions, pos %.1f) ──",
-			gap.Query, gap.TotalImpressions, gap.AvgPosition)
+		// Cluster key dedup — skip queries whose topic cluster is already covered
+		clusterKey := services.ClusterKey(gap.Query)
+		if usedClusterKeys[clusterKey] {
+			continue
+		}
+
+		log.Printf("[content-creator] ── Trending: %q (%d impr, pos %.1f, growth %+.0f%%) ──",
+			gap.Query, gap.TotalImpressions, gap.AvgPosition, gap.GrowthRatio*100)
 
 		// Generate blog post via GPT-4o
-		post, err := s.generateBlogPost(ctx, gap.Query, gap.TotalImpressions)
+		post, err := s.generateBlogPostAware(ctx, gap.Query, gap.TotalImpressions, existingHeadingsList, cmsCategories, categoryCounts)
 		if err != nil {
 			log.Printf("[content-creator]   ✗ generation failed: %v", err)
 			continue
@@ -107,8 +129,8 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 			continue
 		}
 
-		// Get a default author and category from CMS
-		authorID, categoryID := s.getDefaultAuthorAndCategory(ctx)
+		categoryRelID := s.resolveCategoryID(post.Category)
+		authorID := s.resolveAuthorID()
 
 		// Create post in CMS
 		cmsPost := map[string]interface{}{
@@ -128,8 +150,8 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 		if authorID != "" {
 			cmsPost["author"] = authorID
 		}
-		if categoryID != "" {
-			cmsPost["category"] = categoryID
+		if categoryRelID != "" {
+			cmsPost["category"] = categoryRelID
 		}
 
 		docID, err := s.cms.CreatePost(cmsPost)
@@ -139,6 +161,9 @@ func (s *Server) handleCreateContent(ctx context.Context, task *asynq.Task) erro
 		}
 
 		log.Printf("[content-creator]   ✓ Created post %s: %q (hidden, needs review)", docID, post.Heading)
+
+		usedClusterKeys[clusterKey] = true
+		existingHeadings[strings.ToLower(post.Heading)] = true
 
 		// Record for tracking
 		s.db.Collection(models.ColSuggestions).InsertOne(ctx, models.SeoSuggestion{
@@ -188,16 +213,30 @@ type contentOutline struct {
 
 // generateBlogPost uses a 2-step agent pipeline with no extra instructions.
 func (s *Server) generateBlogPost(ctx context.Context, targetQuery string, impressions int64) (*generatedPost, error) {
-	return s.generateBlogPostWithInstructions(ctx, targetQuery, impressions, "")
+	return s.generateBlogPostFull(ctx, targetQuery, impressions, "", nil, nil, nil, nil)
 }
 
-// generateBlogPostWithInstructions uses a 2-step agent pipeline:
+// generateBlogPostAware uses a 2-step agent pipeline, passing existing headings and category distribution to avoid duplication.
+func (s *Server) generateBlogPostAware(ctx context.Context, targetQuery string, impressions int64, existingHeadings []string, cmsCategories []string, categoryCounts map[string]int) (*generatedPost, error) {
+	return s.generateBlogPostFull(ctx, targetQuery, impressions, "", existingHeadings, cmsCategories, categoryCounts, nil)
+}
+
+// generateBlogPostEnriched is the same as Aware but with current-moment research
+// (festivals, transits, celebrity news) layered into the strategist prompt.
+func (s *Server) generateBlogPostEnriched(ctx context.Context, targetQuery string, impressions int64, existingHeadings []string, cmsCategories []string, categoryCounts map[string]int, enrich *ThemeEnrichment) (*generatedPost, error) {
+	return s.generateBlogPostFull(ctx, targetQuery, impressions, "", existingHeadings, cmsCategories, categoryCounts, enrich)
+}
+
+// generateBlogPostWithInstructions uses a 2-step agent pipeline with custom admin instructions.
+func (s *Server) generateBlogPostWithInstructions(ctx context.Context, targetQuery string, impressions int64, customInstructions string) (*generatedPost, error) {
+	return s.generateBlogPostFull(ctx, targetQuery, impressions, customInstructions, nil, nil, nil, nil)
+}
+
+// generateBlogPostFull uses a 2-step agent pipeline:
 //
 //	Step 1 — Content Strategist: research the topic, pick an angle, build an outline
 //	Step 2 — Content Writer: write the full article from the outline (uses higher-quality model)
-//
-// customInstructions is optional admin guidance injected into both steps.
-func (s *Server) generateBlogPostWithInstructions(ctx context.Context, targetQuery string, impressions int64, customInstructions string) (*generatedPost, error) {
+func (s *Server) generateBlogPostFull(ctx context.Context, targetQuery string, impressions int64, customInstructions string, existingHeadings []string, cmsCategories []string, categoryCounts map[string]int, enrich *ThemeEnrichment) (*generatedPost, error) {
 
 	extraGuidance := ""
 	if customInstructions != "" {
@@ -212,6 +251,30 @@ func (s *Server) generateBlogPostWithInstructions(ctx context.Context, targetQue
 		blogModel = s.cfg.OpenAIModel
 	}
 
+	// Build existing-headings context for dedup (show last 50 to keep prompt size reasonable)
+	existingHeadingsBlock := ""
+	if len(existingHeadings) > 0 {
+		headingsToShow := existingHeadings
+		if len(headingsToShow) > 50 {
+			headingsToShow = headingsToShow[len(headingsToShow)-50:]
+		}
+		existingHeadingsBlock = "\n\nALREADY PUBLISHED TITLES (do NOT repeat these topics, angles, or similar headings):\n"
+		for _, h := range headingsToShow {
+			existingHeadingsBlock += fmt.Sprintf("- %s\n", h)
+		}
+	}
+
+	// Build category distribution context so LLM picks underserved categories
+	categoryBlock := ""
+	if len(cmsCategories) > 0 {
+		categoryBlock = "\n\nAVAILABLE CATEGORIES (with current post count — prefer categories with fewer posts):\n"
+		for _, cat := range cmsCategories {
+			count := categoryCounts[strings.ToLower(cat)]
+			categoryBlock += fmt.Sprintf("- %s (%d posts)\n", cat, count)
+		}
+		categoryBlock += "\nYou MUST pick one of the categories listed above. Prefer categories with fewer posts to balance coverage across the site.\n"
+	}
+
 	// ── Step 1: Content Strategist — research & outline ──────────────────────
 
 	strategistPrompt := fmt.Sprintf(`You are a content planner at 91Astrology.com, an Indian Vedic astrology website.
@@ -221,13 +284,41 @@ Plan a blog post for this topic: "%s"
 Search impressions: %d
 
 Rules:
-1. Pick ONE specific angle — not a broad overview. Example: instead of "all about Ekadashi", pick "why breaking Ekadashi vrat early causes problems" or "5 foods you can eat during Ekadashi fast".
-2. The heading must sound like a real Hindi astrology blog title. Short, direct, clickable.
-   GOOD: "Ekadashi Ka Vrat Kaise Kholein — Sahi Vidhi", "Shani Sade Sati Mein Kya Karein Kya Na Karein", "Rahu Ketu Transit 2026: Kaun Si Rashi Ko Milega Fayda?"
-   BAD: "Unveiling the Mysteries of Ekadashi", "A Comprehensive Guide to Sade Sati", "Harnessing the Power of Rahu Ketu Transit"
-3. Plan 5-7 sections. Each section title should be a question or a specific claim, not a generic topic.
-   GOOD section: "Vrat kholne ka sahi samay kya hai?" / "Which nakshatra people are most affected?"
+1. Pick ONE specific, UNIQUE angle — not a broad overview. If a list of already-published titles is provided below, you MUST choose a completely different angle that has zero overlap with any existing post. Think about what aspect of this topic has NOT been covered yet.
+   Example: instead of "all about Ekadashi", pick "why breaking Ekadashi vrat early causes problems" or "5 foods you can eat during Ekadashi fast".
+
+2. THE HEADING IS THE MOST IMPORTANT FIELD. It MUST contain at least ONE of these viral-hook elements (preferably two):
+   (a) A NUMBER — "3 mistakes", "5 din mein", "7 cheezein", "₹10,000 ka nuksaan"
+   (b) A NAMED PERSON in current news — Bollywood actor, cricketer, politician (only if their kundli/event ties to the topic)
+   (c) AN URGENCY WINDOW — "is hafte", "11 May se 14 May tak", "agle 7 din", "before purnima", a specific date from the CURRENT-MOMENT RESEARCH below
+   (d) A CONTRARIAN CLAIM — "why most people get this wrong", "the one transit nobody talks about", "yeh galti mat karein", "jo astrologers nahi batate"
+   (e) A SPECIFIC OUTCOME — "career milega boost", "shaadi tutegi", "paisa aayega", "naukri jaayegi", "love life mein twist"
+
+   If CURRENT-MOMENT RESEARCH provides a recommendedDateHook, the heading MUST anchor to that exact date or window.
+
+   GOOD headings (note the hook):
+   - "11 May Se Mangal Mesh Mein: In 4 Rashiyon Ko Milega Career Boost"   ← date + number + outcome
+   - "Shani Sade Sati: Yeh 3 Galtiyaan Mat Karna Warna Paisa Khatam"     ← number + contrarian + outcome
+   - "Akshaya Tritiya 2026: Sona Kharidne Se Pehle Yeh Ek Cheez Padh Lo" ← date + contrarian
+   - "Harbhajan Singh Ki Kundli: 12 May Ko Kya Hone Wala Hai?"          ← named person + date + outcome
+   - "Is Hafte Mokor Rashi Walon Ke Liye 5 Din Hain Sabse Bhaari"        ← urgency + number + outcome
+
+   BAD headings (these get the post REJECTED — bland, descriptive, no hook):
+   - "Mokor Rashi Ke Liye Akshaya Tritiya Kaise Laaye Dhan Labh"  ← descriptive how-to, no hook, no urgency
+   - "Chaitra Purnima Par Makar Rashi Kaise Karein Vikas"         ← descriptive, no number/outcome/specifics
+   - "Ekadashi Ka Vrat Kaise Kholein — Sahi Vidhi"                ← evergreen how-to, no hook
+   - "Understanding the Significance of Sade Sati"                ← generic explainer
+   - Any heading starting with "Kaise [verb]" without a number, date, or named person elsewhere in the title
+
+   BANNED HEADING PATTERNS (do not use these as a template):
+   - "X kaise laaye Y" / "X kaise karein Y" — these are descriptive, not viral
+   - "Sahi vidhi", "complete guide", "everything you need to know"
+   - Heading without a single number, date, named person, or specific outcome
+
+3. Plan 5-7 sections. Each section title should be a question or a specific claim, not a generic topic. At least ONE section title must explicitly reference the date/event from CURRENT-MOMENT RESEARCH.
+   GOOD section: "11 May ke baad Mokor Rashi walon ko kya karna chahiye?" / "Kaunsi 4 rashiyon par sabse zyada asar?"
    BAD section: "Understanding the Significance" / "The Importance of Rituals"
+
 4. List 6-8 Hindi/Sanskrit terms readers would search for (e.g., "ekadashi vrat vidhi", "parana time", "nirjala ekadashi").
 5. Image prompt: Write a DALL-E prompt for a unique featured image that is SPECIFIC to the blog topic. The image must visually represent the actual subject of the article — not a generic spiritual scene.
    - If the topic is about a zodiac sign → show its symbol, constellation, or associated imagery
@@ -247,7 +338,7 @@ Output ONLY valid JSON (no markdown fences):
 {
   "angle": "specific angle in 1 sentence",
   "audience": "who will read this and why",
-  "category": "Festival|Zodiac|Kundli|Numerology|Vedic|Tarot|Vastu|Palm Reading|National",
+  "category": "one of the available categories listed below (or best fit if no list provided)",
   "heading": "Hinglish heading, max 65 chars",
   "metaTitle": "SEO title, max 60 chars, Hinglish",
   "metaDescription": "English meta desc, max 155 chars, include topic + action word",
@@ -263,10 +354,10 @@ Output ONLY valid JSON (no markdown fences):
 	stratResp, err := s.openai.Client().CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.cfg.OpenAIModel,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: "You are a content planner for an Indian Vedic astrology blog. You think like an Indian reader searching Google in Hindi/English. Output only valid JSON."},
-			{Role: openai.ChatMessageRoleUser, Content: strategistPrompt + extraGuidance},
+			{Role: openai.ChatMessageRoleSystem, Content: "You are a content planner for an Indian Vedic astrology blog. You think like a viral Indian content creator on YouTube/Instagram, not like a textbook author. Every heading must have a sharp viral hook (number, named person, urgency date, contrarian claim, or specific outcome) — descriptive 'how to' titles are rejected. Output only valid JSON."},
+			{Role: openai.ChatMessageRoleUser, Content: strategistPrompt + renderEnrichmentBlock(enrich) + categoryBlock + existingHeadingsBlock + extraGuidance},
 		},
-		Temperature: 0.5,
+		Temperature: 0.7,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("strategist step: %w", err)
@@ -481,6 +572,32 @@ func (s *Server) resolveCategoryID(name string) string {
 		}
 	}
 	return ""
+}
+
+type cmsCategory struct {
+	ID   string
+	Name string
+}
+
+// fetchCMSCategories returns all categories from CMS with their IDs and names.
+func (s *Server) fetchCMSCategories() []cmsCategory {
+	cats, err := s.cms.ListCategories(30)
+	if err != nil {
+		log.Printf("[content] WARN: could not fetch categories: %v", err)
+		return nil
+	}
+	var result []cmsCategory
+	for _, cat := range cats {
+		id, _ := cat["id"].(string)
+		n, _ := cat["name"].(string)
+		if n == "" {
+			n, _ = cat["Name"].(string)
+		}
+		if id != "" && n != "" {
+			result = append(result, cmsCategory{ID: id, Name: n})
+		}
+	}
+	return result
 }
 
 // resolveAuthorID returns the first non-archived English author from CMS.

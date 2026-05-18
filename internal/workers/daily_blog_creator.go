@@ -12,7 +12,6 @@ import (
 
 	"github.com/hibiken/asynq"
 	openai "github.com/sashabaranov/go-openai"
-	"go.mongodb.org/mongo-driver/bson"
 
 	"github.com/91astro/seo-agent/internal/models"
 	"github.com/91astro/seo-agent/internal/services"
@@ -49,50 +48,62 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 	}
 
 	log.Println("[daily-blog] ─────────────────────────────────────────")
-	log.Printf("[daily-blog] Creating up to %d new blog posts from content gaps...", p.MaxPosts)
+	log.Printf("[daily-blog] Creating up to %d new blog posts from trending GSC queries...", p.MaxPosts)
 
-	// ── Step 1: Find content gaps from GSC data ──────────────────────────────
-
-	rawCol := s.db.Collection(models.ColRawData)
-	candidateLimit := int64(p.MaxPosts * 20) // wider pool to find unused clusters
-
-	// Content gap: queries with any search demand we don't rank well for.
-	// - impressions >= 10 catches long-tail queries (easier to rank, less competition)
-	// - position >= 5 includes page-1 bottom results that could be improved
-	pipeline := []bson.D{
-		{{Key: "$group", Value: bson.D{
-			{Key: "_id", Value: "$query"},
-			{Key: "totalImpressions", Value: bson.D{{Key: "$sum", Value: "$impressions"}}},
-			{Key: "totalClicks", Value: bson.D{{Key: "$sum", Value: "$clicks"}}},
-			{Key: "avgPosition", Value: bson.D{{Key: "$avg", Value: "$position"}}},
-			{Key: "pages", Value: bson.D{{Key: "$addToSet", Value: "$page"}}},
-		}}},
-		{{Key: "$match", Value: bson.D{
-			{Key: "totalImpressions", Value: bson.D{{Key: "$gte", Value: 10}}},
-			{Key: "avgPosition", Value: bson.D{{Key: "$gte", Value: 5}}},
-		}}},
-		{{Key: "$sort", Value: bson.D{{Key: "totalImpressions", Value: -1}}}},
-		{{Key: "$limit", Value: candidateLimit}},
-	}
-
-	cursor, err := rawCol.Aggregate(ctx, pipeline)
+	// ── Step 1: Pull trending organic queries directly from GSC ───────────────
+	//
+	// We compare the last 7 days of GSC data against the prior 7 days and rank
+	// by a volume-weighted growth score. This surfaces queries that are
+	// actually rising in search demand right now — not stale long-tail gaps.
+	trending, err := s.gsc.FetchTrendingQueries(ctx, 7, 20)
 	if err != nil {
-		return fmt.Errorf("daily-blog content gap aggregate: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var gaps []struct {
-		Query            string   `bson:"_id"`
-		TotalImpressions int64    `bson:"totalImpressions"`
-		TotalClicks      int64    `bson:"totalClicks"`
-		AvgPosition      float64  `bson:"avgPosition"`
-		Pages            []string `bson:"pages"`
-	}
-	if err := cursor.All(ctx, &gaps); err != nil {
-		return err
+		return fmt.Errorf("daily-blog trending fetch: %w", err)
 	}
 
-	log.Printf("[daily-blog] Found %d potential content gaps", len(gaps))
+	type gapCandidate struct {
+		Query            string
+		TotalImpressions int64
+		TotalClicks      int64
+		AvgPosition      float64
+		GrowthRatio      float64
+	}
+	var gaps []gapCandidate
+	candidateLimit := p.MaxPosts * 20
+	for _, t := range trending {
+		// Skip queries we already rank well for (top 3) — those don't need
+		// a brand-new blog post; the existing page is already ranking.
+		if t.AvgPosition > 0 && t.AvgPosition <= 3 {
+			continue
+		}
+		gaps = append(gaps, gapCandidate{
+			Query:            t.Query,
+			TotalImpressions: t.RecentImpressions,
+			TotalClicks:      t.RecentClicks,
+			AvgPosition:      t.AvgPosition,
+			GrowthRatio:      t.GrowthRatio,
+		})
+		if len(gaps) >= candidateLimit {
+			break
+		}
+	}
+
+	log.Printf("[daily-blog] %d trending queries from GSC (top candidates)", len(gaps))
+
+	// ── Step 1b: Cluster sibling queries ─────────────────────────────────────
+	//
+	// Queries like "মকর রাশি", "মকর রাশিফল", "মকর রাশির রাশিফল" all share
+	// the same cluster key. We bundle siblings with the strongest primary so
+	// the enrichment + strategist see the full theme, not a lone query.
+	clusterSiblings := map[string][]string{}
+	primaryByCluster := map[string]string{}
+	for _, g := range gaps {
+		ck := services.ClusterKey(g.Query)
+		if _, seen := primaryByCluster[ck]; !seen {
+			primaryByCluster[ck] = g.Query
+		} else if g.Query != primaryByCluster[ck] {
+			clusterSiblings[ck] = append(clusterSiblings[ck], g.Query)
+		}
+	}
 
 	// ── Step 2: Build dedup sets ─────────────────────────────────────────────
 
@@ -106,11 +117,27 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 		log.Printf("[daily-blog] WARN: could not list existing posts: %v", err)
 	}
 	existingHeadings := map[string]bool{}
+	var existingHeadingsList []string
+	categoryIDCounts := map[string]int{}
 	for _, post := range existingPosts {
 		if h, ok := post["Heading"].(string); ok {
 			existingHeadings[strings.ToLower(h)] = true
+			existingHeadingsList = append(existingHeadingsList, h)
+		}
+		if catID, ok := post["category"].(string); ok && catID != "" {
+			categoryIDCounts[catID]++
 		}
 	}
+
+	// Fetch real categories from CMS and build name→count map using CMS IDs
+	cmsCategoryMap := s.fetchCMSCategories()
+	var cmsCategories []string
+	categoryCounts := map[string]int{}
+	for _, cat := range cmsCategoryMap {
+		cmsCategories = append(cmsCategories, cat.Name)
+		categoryCounts[strings.ToLower(cat.Name)] = categoryIDCounts[cat.ID]
+	}
+	log.Printf("[daily-blog] CMS categories: %v", cmsCategories)
 
 	// ── Step 3: Filter gaps and generate posts ────────────────────────────────
 
@@ -131,10 +158,23 @@ func (s *Server) handleDailyBlogCreate(ctx context.Context, task *asynq.Task) er
 			continue
 		}
 
-		log.Printf("[daily-blog] ── Gap: %q (%d impressions, pos %.1f) ──",
-			gap.Query, gap.TotalImpressions, gap.AvgPosition)
+		log.Printf("[daily-blog] ── Trending: %q (%d impr, pos %.1f, growth %+.0f%%) ──",
+			gap.Query, gap.TotalImpressions, gap.AvgPosition, gap.GrowthRatio*100)
 
-		post, err := s.generateBlogPost(ctx, gap.Query, gap.TotalImpressions)
+		// Enrich the theme with current-moment research (festivals, transits,
+		// celebrity news) so the strategist can pick a time-anchored angle.
+		// Soft-fails: if enrichment errors, we still generate (just less timely).
+		siblings := clusterSiblings[clusterKey]
+		enrich, err := s.enrichTheme(ctx, gap.Query, siblings)
+		if err != nil {
+			log.Printf("[daily-blog]   ! enrichment failed (continuing without it): %v", err)
+			enrich = nil
+		} else {
+			log.Printf("[daily-blog]   * enrichment: archetype=%q anchor=%q",
+				enrich.BestArchetype, enrich.RecommendedDateHook)
+		}
+
+		post, err := s.generateBlogPostEnriched(ctx, gap.Query, gap.TotalImpressions, existingHeadingsList, cmsCategories, categoryCounts, enrich)
 		if err != nil {
 			log.Printf("[daily-blog]   x generation failed: %v", err)
 			continue

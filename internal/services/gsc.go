@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,124 @@ func (g *GSCService) FetchByDevice(ctx context.Context, startDate, endDate, devi
 // FetchByCountry pulls data filtered by country code.
 func (g *GSCService) FetchByCountry(ctx context.Context, startDate, endDate, country string) ([]GSCRow, error) {
 	return g.fetchFiltered(ctx, startDate, endDate, "country", country)
+}
+
+// TrendingQuery represents a query that is rising in search demand,
+// scored by combining recent impression volume with growth over a prior period.
+type TrendingQuery struct {
+	Query             string
+	RecentImpressions int64
+	RecentClicks      int64
+	PriorImpressions  int64
+	AvgPosition       float64
+	GrowthRatio       float64 // (recent - prior) / max(prior, 1)
+	Score             float64 // recent * (1 + growth)
+}
+
+// FetchTrendingQueries pulls organic queries from GSC, comparing the most
+// recent windowDays window (with the standard 4-day GSC reporting lag) against
+// the immediately prior window of the same length. Queries are ranked by a
+// volume-weighted growth score so truly trending searches surface first.
+//
+// Only queries with at least minRecentImpressions in the recent window are
+// returned. Brand/navigational and very short queries are filtered upstream.
+func (g *GSCService) FetchTrendingQueries(ctx context.Context, windowDays, minRecentImpressions int) ([]TrendingQuery, error) {
+	if windowDays <= 0 {
+		windowDays = 7
+	}
+	if minRecentImpressions <= 0 {
+		minRecentImpressions = 20
+	}
+
+	// 4-day reporting lag: GSC data is incomplete for the last ~3 days.
+	lagEnd := time.Now().AddDate(0, 0, -4)
+	recentEnd := lagEnd.Format("2006-01-02")
+	recentStart := lagEnd.AddDate(0, 0, -(windowDays - 1)).Format("2006-01-02")
+	priorEnd := lagEnd.AddDate(0, 0, -windowDays).Format("2006-01-02")
+	priorStart := lagEnd.AddDate(0, 0, -(2*windowDays - 1)).Format("2006-01-02")
+
+	log.Printf("[gsc] Trending: recent %s..%s vs prior %s..%s",
+		recentStart, recentEnd, priorStart, priorEnd)
+
+	recent, err := g.queryByQuery(ctx, recentStart, recentEnd)
+	if err != nil {
+		return nil, fmt.Errorf("trending recent window: %w", err)
+	}
+	prior, err := g.queryByQuery(ctx, priorStart, priorEnd)
+	if err != nil {
+		return nil, fmt.Errorf("trending prior window: %w", err)
+	}
+
+	priorMap := map[string]int64{}
+	for _, r := range prior {
+		priorMap[r.Query] = r.Impressions
+	}
+
+	var out []TrendingQuery
+	for _, r := range recent {
+		if r.Impressions < int64(minRecentImpressions) {
+			continue
+		}
+		q := strings.TrimSpace(r.Query)
+		if len(q) < 4 {
+			continue
+		}
+		prev := priorMap[r.Query]
+		denom := float64(prev)
+		if denom < 1 {
+			denom = 1
+		}
+		growth := (float64(r.Impressions) - float64(prev)) / denom
+		score := float64(r.Impressions) * (1 + growth)
+		out = append(out, TrendingQuery{
+			Query:             r.Query,
+			RecentImpressions: r.Impressions,
+			RecentClicks:      r.Clicks,
+			PriorImpressions:  prev,
+			AvgPosition:       r.Position,
+			GrowthRatio:       growth,
+			Score:             score,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out, nil
+}
+
+// queryByQuery pulls aggregated metrics keyed by query for the given range.
+func (g *GSCService) queryByQuery(ctx context.Context, startDate, endDate string) ([]GSCRow, error) {
+	var rows []GSCRow
+	startRow := int64(0)
+	rowLimit := int64(25000)
+
+	for {
+		req := &searchconsole.SearchAnalyticsQueryRequest{
+			StartDate:  startDate,
+			EndDate:    endDate,
+			Dimensions: []string{"query"},
+			RowLimit:   rowLimit,
+			StartRow:   startRow,
+			Type:       "web",
+		}
+		resp, err := g.svc.Searchanalytics.Query(g.siteURL, req).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("GSC query-only fetch: %w", err)
+		}
+		for _, r := range resp.Rows {
+			rows = append(rows, GSCRow{
+				Query:       r.Keys[0],
+				Clicks:      int64(r.Clicks),
+				Impressions: int64(r.Impressions),
+				CTR:         r.Ctr * 100,
+				Position:    r.Position,
+			})
+		}
+		if int64(len(resp.Rows)) < rowLimit {
+			break
+		}
+		startRow += rowLimit
+	}
+	return rows, nil
 }
 
 // FetchSearchAppearance pulls data with search appearance dimension
