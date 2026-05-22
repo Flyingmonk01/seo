@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/hibiken/asynq"
-	"go.mongodb.org/mongo-driver/mongo"
 	"github.com/91astro/seo-agent/config"
 	"github.com/91astro/seo-agent/internal/agent"
 	"github.com/91astro/seo-agent/internal/services"
+	"github.com/hibiken/asynq"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Server struct {
@@ -25,6 +25,7 @@ type Server struct {
 	analytics   *services.AnalyticsService
 	mail        *services.MailService
 	prokerala   *services.ProkeralaService
+	pinterest   *services.PinterestService
 
 	// Agent layer
 	seoAgent *agent.SEOAgent
@@ -57,6 +58,7 @@ func NewServer(redisAddr string, db *mongo.Database, cfg *config.Config) *Server
 		analytics: services.NewAnalyticsService(cfg.GAPropertyID, cfg.GACredentialsPath, cfg.DatadogAPIKey, cfg.DatadogAppKey),
 		mail:      services.NewMailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword),
 		prokerala: services.NewProkeralaService(cfg.ProkeralaClientID, cfg.ProkeralaClientSecret),
+		pinterest: services.NewPinterestService(db, cfg.PinterestEnabled, cfg.PinterestAppID, cfg.PinterestAppSecret, cfg.PinterestRefreshToken, cfg.PinterestBoardID),
 		seoAgent:  agent.NewSEOAgent(services.NewOpenAIService(cfg.OpenAIAPIKey, cfg.OpenAIModel)),
 	}
 }

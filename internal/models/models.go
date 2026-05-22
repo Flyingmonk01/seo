@@ -9,16 +9,19 @@ import (
 // ── Collections ──────────────────────────────────────────────────────────────
 
 const (
-	ColRawData    = "seo_raw_data"
-	ColPageStats  = "seo_page_stats"
-	ColIssues     = "seo_issues"
+	ColRawData     = "seo_raw_data"
+	ColPageStats   = "seo_page_stats"
+	ColIssues      = "seo_issues"
 	ColSuggestions = "seo_suggestions"
-	ColChanges    = "seo_changes"
-	ColResults    = "seo_results"
-	ColFeatures   = "seo_features"
-	ColLearnings  = "seo_learnings"
-	ColFlags      = "seo_feature_flags"
-	ColBlogTopics = "seo_blog_topics"
+	ColChanges     = "seo_changes"
+	ColResults     = "seo_results"
+	ColFeatures    = "seo_features"
+	ColLearnings   = "seo_learnings"
+	ColFlags       = "seo_feature_flags"
+	ColBlogTopics  = "seo_blog_topics"
+
+	// ColPinterestAuth holds the single Pinterest OAuth token document.
+	ColPinterestAuth = "seo_pinterest_auth"
 )
 
 // ── Issue / Suggestion status ─────────────────────────────────────────────────
@@ -38,9 +41,9 @@ const (
 	IssueLive              IssueStatus = "live"
 
 	SuggestionPending  SuggestionStatus = "pending"
-	SuggestionApproved SuggestionStatus = "approved"  // human approved, push pending/failed
+	SuggestionApproved SuggestionStatus = "approved" // human approved, push pending/failed
 	SuggestionRejected SuggestionStatus = "rejected"
-	SuggestionLive     SuggestionStatus = "live"       // successfully pushed to backend
+	SuggestionLive     SuggestionStatus = "live" // successfully pushed to backend
 
 	FeatureResearching FeatureStatus = "researching"
 	FeaturePlanning    FeatureStatus = "planning"
@@ -53,10 +56,10 @@ const (
 	IssueTypeLowCTR             IssueType = "low_ctr"
 	IssueTypeRankingOpportunity IssueType = "ranking_opportunity"
 	IssueTypeScaling            IssueType = "scaling"
-	IssueTypeMobileGap          IssueType = "mobile_gap"          // good on desktop, bad on mobile
-	IssueTypeDecliningCTR       IssueType = "declining_ctr"       // CTR dropping vs previous period
-	IssueTypeContentGap         IssueType = "content_gap"         // high impressions, no good page
-	IssueTypeCannibalization    IssueType = "cannibalization"      // same query ranking on multiple pages
+	IssueTypeMobileGap          IssueType = "mobile_gap"      // good on desktop, bad on mobile
+	IssueTypeDecliningCTR       IssueType = "declining_ctr"   // CTR dropping vs previous period
+	IssueTypeContentGap         IssueType = "content_gap"     // high impressions, no good page
+	IssueTypeCannibalization    IssueType = "cannibalization" // same query ranking on multiple pages
 
 	WidgetTypeFAQ        WidgetType = "faq"
 	WidgetTypeRating     WidgetType = "rating"
@@ -78,12 +81,12 @@ type SeoRawData struct {
 	Impressions int64              `bson:"impressions" json:"impressions"`
 	CTR         float64            `bson:"ctr" json:"ctr"`
 	Position    float64            `bson:"position" json:"position"`
-	Date        string             `bson:"date" json:"date"` // YYYY-MM-DD
-	Device      string             `bson:"device" json:"device"`           // DESKTOP, MOBILE, TABLET
-	Country     string             `bson:"country" json:"country"`         // 3-letter country code
-	Intent      string             `bson:"intent" json:"intent"`           // informational, transactional, navigational, local
-	Cluster     string             `bson:"cluster" json:"cluster"`         // normalized query cluster key
-	PosBucket   string             `bson:"pos_bucket" json:"posBucket"`    // top_3, first_page, striking, deep
+	Date        string             `bson:"date" json:"date"`            // YYYY-MM-DD
+	Device      string             `bson:"device" json:"device"`        // DESKTOP, MOBILE, TABLET
+	Country     string             `bson:"country" json:"country"`      // 3-letter country code
+	Intent      string             `bson:"intent" json:"intent"`        // informational, transactional, navigational, local
+	Cluster     string             `bson:"cluster" json:"cluster"`      // normalized query cluster key
+	PosBucket   string             `bson:"pos_bucket" json:"posBucket"` // top_3, first_page, striking, deep
 	Locale      string             `bson:"locale" json:"locale"`
 	CreatedAt   time.Time          `bson:"created_at" json:"createdAt"`
 }
@@ -100,23 +103,23 @@ type SeoPageStats struct {
 	AvgPosition      float64            `bson:"avg_position" json:"avgPosition"`
 	TopQuery         string             `bson:"top_query" json:"topQuery"`
 	QueryCount       int                `bson:"query_count" json:"queryCount"`
-	MobileShare      float64            `bson:"mobile_share" json:"mobileShare"`       // % of impressions from mobile
+	MobileShare      float64            `bson:"mobile_share" json:"mobileShare"` // % of impressions from mobile
 	TopCountry       string             `bson:"top_country" json:"topCountry"`
 	DominantIntent   string             `bson:"dominant_intent" json:"dominantIntent"` // most common intent for this page
 	// Deltas (vs previous period)
-	ClicksDelta      int64              `bson:"clicks_delta" json:"clicksDelta"`
-	CTRDelta         float64            `bson:"ctr_delta" json:"ctrDelta"`
-	PositionDelta    float64            `bson:"position_delta" json:"positionDelta"`
-	CreatedAt        time.Time          `bson:"created_at" json:"createdAt"`
+	ClicksDelta   int64     `bson:"clicks_delta" json:"clicksDelta"`
+	CTRDelta      float64   `bson:"ctr_delta" json:"ctrDelta"`
+	PositionDelta float64   `bson:"position_delta" json:"positionDelta"`
+	CreatedAt     time.Time `bson:"created_at" json:"createdAt"`
 }
 
 // ── SeoIssue ──────────────────────────────────────────────────────────────────
 
 type PageMetrics struct {
-	AvgCTR          float64 `bson:"avg_ctr" json:"avgCTR"`
-	AvgPosition     float64 `bson:"avg_position" json:"avgPosition"`
-	TotalImpressions int64  `bson:"total_impressions" json:"totalImpressions"`
-	TotalClicks     int64   `bson:"total_clicks" json:"totalClicks"`
+	AvgCTR           float64 `bson:"avg_ctr" json:"avgCTR"`
+	AvgPosition      float64 `bson:"avg_position" json:"avgPosition"`
+	TotalImpressions int64   `bson:"total_impressions" json:"totalImpressions"`
+	TotalClicks      int64   `bson:"total_clicks" json:"totalClicks"`
 }
 
 type SeoIssue struct {
@@ -128,21 +131,21 @@ type SeoIssue struct {
 	Metrics       PageMetrics        `bson:"metrics" json:"metrics"`
 	Status        IssueStatus        `bson:"status" json:"status"`
 	// New intelligence fields
-	Intent        string             `bson:"intent,omitempty" json:"intent,omitempty"`
-	Device        string             `bson:"device,omitempty" json:"device,omitempty"`           // which device has worst performance
-	MobileShare   float64            `bson:"mobile_share,omitempty" json:"mobileShare,omitempty"` // % mobile traffic
-	PosBucket     string             `bson:"pos_bucket,omitempty" json:"posBucket,omitempty"`
-	Cluster       string             `bson:"cluster,omitempty" json:"cluster,omitempty"`
-	CTRDelta      float64            `bson:"ctr_delta,omitempty" json:"ctrDelta,omitempty"`       // trend vs previous period
-	DetectedAt    time.Time          `bson:"detected_at" json:"detectedAt"`
+	Intent      string    `bson:"intent,omitempty" json:"intent,omitempty"`
+	Device      string    `bson:"device,omitempty" json:"device,omitempty"`            // which device has worst performance
+	MobileShare float64   `bson:"mobile_share,omitempty" json:"mobileShare,omitempty"` // % mobile traffic
+	PosBucket   string    `bson:"pos_bucket,omitempty" json:"posBucket,omitempty"`
+	Cluster     string    `bson:"cluster,omitempty" json:"cluster,omitempty"`
+	CTRDelta    float64   `bson:"ctr_delta,omitempty" json:"ctrDelta,omitempty"` // trend vs previous period
+	DetectedAt  time.Time `bson:"detected_at" json:"detectedAt"`
 }
 
 // ── SeoSuggestion ─────────────────────────────────────────────────────────────
 
 type SEOContent struct {
-	Title           string      `bson:"title" json:"title"`
-	MetaDescription string      `bson:"meta_description" json:"metaDescription"`
-	FAQSchema       []FAQItem   `bson:"faq_schema,omitempty" json:"faqSchema,omitempty"`
+	Title           string    `bson:"title" json:"title"`
+	MetaDescription string    `bson:"meta_description" json:"metaDescription"`
+	FAQSchema       []FAQItem `bson:"faq_schema,omitempty" json:"faqSchema,omitempty"`
 }
 
 type FAQItem struct {
@@ -226,14 +229,14 @@ type MetricDelta struct {
 }
 
 type SeoResult struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	ChangeID    primitive.ObjectID `bson:"change_id" json:"changeId"`
-	Page        string             `bson:"page" json:"page"`
-	Window      int                `bson:"window" json:"window"` // 7, 14, 30
-	Before      MetricSnapshot     `bson:"before" json:"before"`
-	After       MetricSnapshot     `bson:"after" json:"after"`
-	Delta       MetricDelta        `bson:"delta" json:"delta"`
-	MeasuredAt  time.Time          `bson:"measured_at" json:"measuredAt"`
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	ChangeID   primitive.ObjectID `bson:"change_id" json:"changeId"`
+	Page       string             `bson:"page" json:"page"`
+	Window     int                `bson:"window" json:"window"` // 7, 14, 30
+	Before     MetricSnapshot     `bson:"before" json:"before"`
+	After      MetricSnapshot     `bson:"after" json:"after"`
+	Delta      MetricDelta        `bson:"delta" json:"delta"`
+	MeasuredAt time.Time          `bson:"measured_at" json:"measuredAt"`
 }
 
 // ── SeoFeature (Pipeline 2 - autonomous feature dev) ─────────────────────────
@@ -245,12 +248,12 @@ type ResearchSignal struct {
 }
 
 type FeaturePlan struct {
-	Title          string          `bson:"title" json:"title"`
-	Hypothesis     string          `bson:"hypothesis" json:"hypothesis"`
-	Changes        []PlannedChange `bson:"changes" json:"changes"`
-	SuccessMetrics SuccessMetrics  `bson:"success_metrics" json:"successMetrics"`
+	Title           string          `bson:"title" json:"title"`
+	Hypothesis      string          `bson:"hypothesis" json:"hypothesis"`
+	Changes         []PlannedChange `bson:"changes" json:"changes"`
+	SuccessMetrics  SuccessMetrics  `bson:"success_metrics" json:"successMetrics"`
 	RollbackTrigger RollbackTrigger `bson:"rollback_trigger" json:"rollbackTrigger"`
-	FeatureFlagKey string          `bson:"feature_flag_key" json:"featureFlagKey"`
+	FeatureFlagKey  string          `bson:"feature_flag_key" json:"featureFlagKey"`
 }
 
 type PlannedChange struct {
@@ -260,9 +263,9 @@ type PlannedChange struct {
 }
 
 type SuccessMetrics struct {
-	BounceRateDelta    float64 `bson:"bounce_rate_delta" json:"bounceRateDelta"`
-	SessionDelta       float64 `bson:"session_delta" json:"sessionDelta"`
-	ConversionDelta    float64 `bson:"conversion_delta" json:"conversionDelta"`
+	BounceRateDelta float64 `bson:"bounce_rate_delta" json:"bounceRateDelta"`
+	SessionDelta    float64 `bson:"session_delta" json:"sessionDelta"`
+	ConversionDelta float64 `bson:"conversion_delta" json:"conversionDelta"`
 }
 
 type RollbackTrigger struct {
@@ -271,27 +274,27 @@ type RollbackTrigger struct {
 }
 
 type MonitorResult struct {
-	Window          int     `bson:"window" json:"window"`
-	BounceRateDelta float64 `bson:"bounce_rate_delta" json:"bounceRateDelta"`
-	SessionDelta    float64 `bson:"session_delta" json:"sessionDelta"`
-	ConversionDelta float64 `bson:"conversion_delta" json:"conversionDelta"`
-	ErrorRateDelta  float64 `bson:"error_rate_delta" json:"errorRateDelta"`
+	Window          int       `bson:"window" json:"window"`
+	BounceRateDelta float64   `bson:"bounce_rate_delta" json:"bounceRateDelta"`
+	SessionDelta    float64   `bson:"session_delta" json:"sessionDelta"`
+	ConversionDelta float64   `bson:"conversion_delta" json:"conversionDelta"`
+	ErrorRateDelta  float64   `bson:"error_rate_delta" json:"errorRateDelta"`
 	MeasuredAt      time.Time `bson:"measured_at" json:"measuredAt"`
 }
 
 type SeoFeature struct {
-	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Page            string             `bson:"page" json:"page"`
-	Signals         []ResearchSignal   `bson:"signals" json:"signals"`
-	Plan            *FeaturePlan       `bson:"plan,omitempty" json:"plan,omitempty"`
-	PRUrl           string             `bson:"pr_url,omitempty" json:"prUrl,omitempty"`
-	PRNumber        int                `bson:"pr_number,omitempty" json:"prNumber,omitempty"`
-	BranchName      string             `bson:"branch_name,omitempty" json:"branchName,omitempty"`
-	Status          FeatureStatus      `bson:"status" json:"status"`
-	MonitorResults  []MonitorResult    `bson:"monitor_results,omitempty" json:"monitorResults,omitempty"`
-	RolledBackAt    *time.Time         `bson:"rolled_back_at,omitempty" json:"rolledBackAt,omitempty"`
-	PromotedAt      *time.Time         `bson:"promoted_at,omitempty" json:"promotedAt,omitempty"`
-	CreatedAt       time.Time          `bson:"created_at" json:"createdAt"`
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Page           string             `bson:"page" json:"page"`
+	Signals        []ResearchSignal   `bson:"signals" json:"signals"`
+	Plan           *FeaturePlan       `bson:"plan,omitempty" json:"plan,omitempty"`
+	PRUrl          string             `bson:"pr_url,omitempty" json:"prUrl,omitempty"`
+	PRNumber       int                `bson:"pr_number,omitempty" json:"prNumber,omitempty"`
+	BranchName     string             `bson:"branch_name,omitempty" json:"branchName,omitempty"`
+	Status         FeatureStatus      `bson:"status" json:"status"`
+	MonitorResults []MonitorResult    `bson:"monitor_results,omitempty" json:"monitorResults,omitempty"`
+	RolledBackAt   *time.Time         `bson:"rolled_back_at,omitempty" json:"rolledBackAt,omitempty"`
+	PromotedAt     *time.Time         `bson:"promoted_at,omitempty" json:"promotedAt,omitempty"`
+	CreatedAt      time.Time          `bson:"created_at" json:"createdAt"`
 }
 
 // ── SeoLearning (self-improvement store) ─────────────────────────────────────
@@ -317,12 +320,12 @@ type SeoLearning struct {
 // ── SeoBlogTopic (tracks queries used for blog generation to prevent repeats) ─
 
 type SeoBlogTopic struct {
-	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Query        string             `bson:"query" json:"query"`
-	ClusterKey   string             `bson:"cluster_key" json:"clusterKey"`
-	PostID       string             `bson:"post_id" json:"postId"`
-	Heading      string             `bson:"heading" json:"heading"`
-	Status        string             `bson:"status" json:"status"`                                  // pending, approved, rejected, regenerating
+	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Query         string             `bson:"query" json:"query"`
+	ClusterKey    string             `bson:"cluster_key" json:"clusterKey"`
+	PostID        string             `bson:"post_id" json:"postId"`
+	Heading       string             `bson:"heading" json:"heading"`
+	Status        string             `bson:"status" json:"status"` // pending, approved, rejected, regenerating
 	RejectReason  string             `bson:"reject_reason,omitempty" json:"rejectReason,omitempty"`
 	CreatedAt     time.Time          `bson:"created_at" json:"createdAt"`
 	ApprovedAt    *time.Time         `bson:"approved_at,omitempty" json:"approvedAt,omitempty"`
@@ -337,7 +340,7 @@ const ColCodeTasks = "seo_code_tasks"
 type CodeTaskStatus = string
 
 const (
-	CodeTaskPending    CodeTaskStatus = "pending"    // waiting for OpenClaw to pick up
+	CodeTaskPending    CodeTaskStatus = "pending"     // waiting for OpenClaw to pick up
 	CodeTaskInProgress CodeTaskStatus = "in_progress" // OpenClaw is working on it
 	CodeTaskDone       CodeTaskStatus = "done"        // PR opened successfully
 	CodeTaskFailed     CodeTaskStatus = "failed"      // OpenClaw reported failure
@@ -346,7 +349,7 @@ const (
 // CodeTaskFile describes a single file change OpenClaw needs to make.
 type CodeTaskFile struct {
 	Repo        string `bson:"repo" json:"repo"`               // "website" or "api"
-	FilePath    string `bson:"file_path" json:"filePath"`       // relative path in repo
+	FilePath    string `bson:"file_path" json:"filePath"`      // relative path in repo
 	Description string `bson:"description" json:"description"` // what to change + why
 }
 
@@ -369,13 +372,13 @@ type CodeTask struct {
 // ── FeatureFlag ───────────────────────────────────────────────────────────────
 
 type FeatureFlag struct {
-	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Key             string             `bson:"key" json:"key"`
-	Enabled         bool               `bson:"enabled" json:"enabled"`
-	RolloutPercent  int                `bson:"rollout_percent" json:"rolloutPercent"`
-	TargetUserIDs   []string           `bson:"target_user_ids,omitempty" json:"targetUserIds,omitempty"`
-	CreatedBy       string             `bson:"created_by" json:"createdBy"`
-	CreatedAt       time.Time          `bson:"created_at" json:"createdAt"`
-	PromotedAt      *time.Time         `bson:"promoted_at,omitempty" json:"promotedAt,omitempty"`
-	RolledBackAt    *time.Time         `bson:"rolled_back_at,omitempty" json:"rolledBackAt,omitempty"`
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Key            string             `bson:"key" json:"key"`
+	Enabled        bool               `bson:"enabled" json:"enabled"`
+	RolloutPercent int                `bson:"rollout_percent" json:"rolloutPercent"`
+	TargetUserIDs  []string           `bson:"target_user_ids,omitempty" json:"targetUserIds,omitempty"`
+	CreatedBy      string             `bson:"created_by" json:"createdBy"`
+	CreatedAt      time.Time          `bson:"created_at" json:"createdAt"`
+	PromotedAt     *time.Time         `bson:"promoted_at,omitempty" json:"promotedAt,omitempty"`
+	RolledBackAt   *time.Time         `bson:"rolled_back_at,omitempty" json:"rolledBackAt,omitempty"`
 }

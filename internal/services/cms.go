@@ -749,3 +749,71 @@ func (c *CMSService) ListPages(limit int, locale string) ([]map[string]interface
 	}
 	return result.Docs, nil
 }
+
+// ── Pinterest publishing helpers ─────────────────────────────────────────────
+
+// ListPinnableTopics fetches "approved" seo-topics that have not yet been
+// pinned to Pinterest (pinId not set). Newest first. The caller still filters
+// out exhausted topics by pinAttempts.
+func (c *CMSService) ListPinnableTopics(limit int) ([]map[string]interface{}, error) {
+	q := url.Values{}
+	q.Set("where[status][equals]", "approved")
+	q.Set("where[pinId][exists]", "false")
+	q.Set("sort", "-createdAt")
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("depth", "0")
+
+	token, err := c.GetToken()
+	if err != nil {
+		return nil, err
+	}
+
+	reqURL := fmt.Sprintf("%s/api/seo-topics?%s", c.baseURL, q.Encode())
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "JWT "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cms list pinnable topics: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("cms list pinnable topics returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Docs []map[string]interface{} `json:"docs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Docs, nil
+}
+
+// GetDocumentWithDepth fetches a CMS document with relationships populated to
+// the given depth (e.g. depth=1 expands a post's featured image into an object).
+func (c *CMSService) GetDocumentWithDepth(collection, docID string, depth int) (map[string]interface{}, error) {
+	reqURL := fmt.Sprintf("%s/api/%s/%s?depth=%d", c.baseURL, collection, docID, depth)
+	resp, err := c.httpClient.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("cms get %s/%s: %w", collection, docID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("cms get %s/%s returned %d", collection, docID, resp.StatusCode)
+	}
+
+	var doc map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}

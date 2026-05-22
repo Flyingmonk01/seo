@@ -63,6 +63,17 @@ type Config struct {
 	// Prokerala Astrology API (astrological events — retrogrades, planetary positions)
 	ProkeralaClientID     string
 	ProkeralaClientSecret string
+
+	// Pinterest API v5 (auto-pins approved blog posts)
+	PinterestEnabled      bool
+	PinterestAppID        string
+	PinterestAppSecret    string
+	PinterestRefreshToken string // initial refresh token from one-time OAuth setup
+	PinterestBoardID      string // destination board for new pins
+
+	// Public URLs used to build Pinterest pin links + images
+	WebsiteURL      string // e.g. https://www.91astrology.com
+	CMSMediaBaseURL string // S3 bucket base for CMS media files
 }
 
 func Load() *Config {
@@ -114,6 +125,15 @@ func Load() *Config {
 
 		ProkeralaClientID:     getEnv("PROKERALA_CLIENT_ID", ""),
 		ProkeralaClientSecret: getEnv("PROKERALA_CLIENT_SECRET", ""),
+
+		PinterestEnabled:      getEnv("PINTEREST_ENABLED", "false") == "true",
+		PinterestAppID:        getEnv("PINTEREST_APP_ID", ""),
+		PinterestAppSecret:    getEnv("PINTEREST_APP_SECRET", ""),
+		PinterestRefreshToken: getEnv("PINTEREST_REFRESH_TOKEN", ""),
+		PinterestBoardID:      getEnv("PINTEREST_BOARD_ID", ""),
+
+		WebsiteURL:      getEnv("WEBSITE_URL", "https://www.91astrology.com"),
+		CMSMediaBaseURL: getEnv("CMS_MEDIA_BASE_URL", "https://91astro-payload-cms.s3.ap-south-1.amazonaws.com"),
 	}
 }
 

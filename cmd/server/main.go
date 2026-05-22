@@ -42,6 +42,9 @@ func main() {
 	// Start CMS topic poller — picks up regeneration requests set by the dashboard
 	workerServer.StartCMSTopicPoller(cfg.RedisAddr, cfg.RedisPassword)
 
+	// Start Pinterest publisher — pins blog posts once their topic is approved
+	workerServer.StartPinterestPublisher()
+
 	// Start cron scheduler (enqueues jobs on schedule)
 	sched := scheduler.New(cfg.RedisAddr, cfg)
 	go sched.Start()
