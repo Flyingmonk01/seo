@@ -57,6 +57,17 @@ func (s *Server) pinTopic(ctx context.Context, t map[string]interface{}) {
 		return
 	}
 
+	// Defensive guards. ListPinnableTopics already filters on these, but the
+	// worker must never re-pin or write to a topic outside its scope: a topic
+	// that already has a pin, or one that is not approved. A loose/stale query
+	// result must not cause a duplicate pin or an unrelated write.
+	if pinID, _ := t["pinId"].(string); pinID != "" {
+		return // already pinned — leave it alone
+	}
+	if status, _ := t["status"].(string); status != "approved" {
+		return // not approved — not ours to touch
+	}
+
 	attempts := toInt(t["pinAttempts"])
 	if attempts >= maxPinAttempts {
 		return // exhausted — needs manual intervention (clear pinAttempts to retry)
